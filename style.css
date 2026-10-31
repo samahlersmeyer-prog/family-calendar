@@ -104,6 +104,7 @@ textarea.in { min-height: 140px; resize: vertical; }
 .calrow { display: grid; grid-template-columns: 40px 1fr 32px; gap: 6px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
 .calrow input[type=color] { width: 36px; height: 36px; border: 0; padding: 0; background: none; border-radius: 50%; }
 .calrow .feed { grid-column: 2 / 4; font-size: 14px; }
+.calrow .share { grid-column: 2 / 4; margin-top: 2px; font-size: 14px; }
 .calrow .st { grid-column: 2 / 4; font-size: 12px; }
 .ok { color: #16a34a; } .bad { color: var(--accent); }
 

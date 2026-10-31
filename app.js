@@ -22,12 +22,17 @@ const CAL_FILE = 'data/calendar.enc';
 const FEEDS_FILE = 'data/feeds.enc';
 
 const DEFAULT_CALENDARS = [
-  { id: 'family', name: 'Family', color: '#2563eb' },
-  { id: 'mad-apple', name: 'Mad Apple', color: '#dc2626' },
-  { id: 'hc-basketball', name: 'Holy Cross Basketball', color: '#7c3aed' },
-  { id: 'max-xc', name: 'Max XC', color: '#059669' },
-  { id: 'theo-baseball', name: 'Theo Baseball', color: '#ea580c' },
+  { id: 'family', name: 'Family', color: '#2563eb', shared: false },
+  { id: 'mad-apple', name: 'Mad Apple', color: '#dc2626', shared: true },
+  { id: 'hc-basketball', name: 'Holy Cross Basketball', color: '#7c3aed', shared: true },
+  { id: 'max-xc', name: 'Max XC', color: '#059669', shared: true },
+  { id: 'theo-baseball', name: 'Theo Baseball', color: '#ea580c', shared: true },
+  { id: 'church', name: 'Church & Kids Programs', color: '#ca8a04', shared: true },
 ];
+// Calendars made before sharing existed: everything except "family" is shared.
+const isShared = (c) => c.shared ?? c.id !== 'family';
+const SHARED_FILE = 'data/shared.enc';
+const FEEDS_SHARED_FILE = 'data/feeds-shared.enc';
 
 /* ---------- small helpers ---------- */
 const $ = (s, el = document) => el.querySelector(s);
@@ -78,7 +83,7 @@ const S = {
   day: todayWall(),
   loadedAt: 0,
 };
-const isEditor = () => !!S.token;
+const isEditor = () => !!S.token && !S.relative;
 const app = $('#app');
 
 /* ---------- GitHub ---------- */
@@ -139,13 +144,25 @@ async function saveCal(mutate, message) {
   throw new Error('Someone else is saving right now — try again.');
 }
 
-const emptyCal = () => ({ title: 'Ahlersmeyer Family Calendar', calendars: DEFAULT_CALENDARS.map((c) => ({ ...c })), events: [], updated: new Date().toISOString() });
+const emptyCal = () => ({ v: 2, title: 'Ahlersmeyer Family Calendar', calendars: DEFAULT_CALENDARS.map((c) => ({ ...c })), events: [], updated: new Date().toISOString() });
 
 async function loadFeeds() {
   try {
-    const f = await readFile(FEEDS_FILE, { api: false });
+    const f = await readFile(S.relative ? FEEDS_SHARED_FILE : FEEDS_FILE, { api: false });
     S.feeds = f.text ? await decryptJSON(f.text, S.pass) : { events: [], status: {} };
   } catch { S.feeds = { events: [], status: {} }; }
+}
+
+/* Add the Church calendar and sharing flags to calendars made before they existed. */
+async function migrate() {
+  if (S.cal.v >= 2) return;
+  try {
+    await saveCal((d) => {
+      for (const c of d.calendars) c.shared = isShared(c);
+      if (!d.calendars.some((c) => c.id === 'church')) d.calendars.push({ ...DEFAULT_CALENDARS.find((c) => c.id === 'church') });
+      d.v = 2;
+    }, 'Add sharing settings');
+  } catch {}
 }
 
 /* ---------- boot / lock / setup ---------- */
@@ -163,16 +180,25 @@ async function unlock(pass, remember) {
   let file;
   try { file = await readFile(CAL_FILE); } catch (e) { return renderLock(e.message); }
   if (!file.text) return renderSetup();
+  S.relative = false;
   try {
     S.cal = await decryptJSON(file.text, pass);
     S.calSalt = saltOf(file.text);
   } catch {
-    store.set('pass', null);
-    return renderLock('That passcode didn’t work.');
+    // Not the family passcode — maybe the extended-family one.
+    let shared = null;
+    try { const sf = await readFile(SHARED_FILE, { api: false }); if (sf.text) shared = await decryptJSON(sf.text, pass); } catch {}
+    if (!shared) {
+      store.set('pass', null);
+      return renderLock('That passcode didn’t work.');
+    }
+    S.cal = shared;
+    S.relative = true;
   }
   S.pass = pass;
   if (remember) store.set('pass', pass);
   await loadFeeds();
+  if (isEditor()) migrate();
   S.loadedAt = Date.now();
   renderMain();
 }
@@ -664,7 +690,8 @@ function calRow(c) {
     <input type="color" value="${esc(c.color)}" ${isEditor() ? '' : 'disabled'} aria-label="Color">
     <input class="in name" value="${esc(c.name)}" placeholder="Calendar name" ${isEditor() ? '' : 'disabled'}>
     ${isEditor() ? `<button class="btn icon ghost del" aria-label="Remove">✕</button>` : '<span></span>'}
-    ${isEditor() ? `<input class="in feed" value="${esc(c.feedUrl || '')}" placeholder="Team calendar link (GameChanger, SportsYou…) — optional">` : ''}
+    ${isEditor() ? `<input class="in feed" value="${esc(c.feedUrl || '')}" placeholder="Team calendar link (GameChanger, SportsYou…) — optional">
+      <label class="check share"><input type="checkbox" class="shared" ${isShared(c) ? 'checked' : ''}> Extended family can see</label>` : ''}
     ${feedStatus(c)}
   </div>`;
 }
@@ -686,16 +713,18 @@ function openSettings() {
       <div class="actions"><button class="btn" id="syncNow">Sync team feeds now</button></div>` : ''}
 
     <h4>This device</h4>
-    <label class="f">GitHub token (only needed to add or change events)</label>
-    <input class="in" id="tok" type="password" value="${esc(S.token || '')}" placeholder="github_pat_…">
-    <div class="actions"><button class="btn" id="saveTok">${S.token ? 'Update token' : 'Become an editor'}</button>
-      ${S.token ? `<button class="btn ghost" id="dropTok">Remove token</button>` : ''}
+    ${S.relative ? '' : `<label class="f">GitHub token (only needed to add or change events)</label>
+    <input class="in" id="tok" type="password" value="${esc(S.token || '')}" placeholder="github_pat_…">`}
+    <div class="actions">${S.relative ? '' : `<button class="btn" id="saveTok">${S.token ? 'Update token' : 'Become an editor'}</button>
+      ${S.token ? `<button class="btn ghost" id="dropTok">Remove token</button>` : ''}`}
       <button class="btn ghost danger" id="lockBtn">Lock this device</button></div>
 
-    <h4>Share with family</h4>
-    <p class="help">Send relatives the link and the passcode. They can view everything but can’t change it.</p>
-    <div class="actions"><button class="btn" id="copyLink">Copy link</button></div>
-    <p class="help">Calendar data is encrypted with the passcode before it’s saved to GitHub.</p>`);
+    ${isEditor() ? `<h4>Extended family</h4>
+    <p class="help">Relatives get their own passcode and only see calendars marked “Extended family can see” (sports, church, etc.). Your Family calendar stays private. Updates reach them about a minute after you save.</p>
+    <label class="f">Extended family passcode</label>
+    <input class="in" id="relPass" type="text" autocomplete="off" value="${esc(S.cal.relativesPass || '')}" placeholder="Something different from yours">
+    <div class="actions"><button class="btn" id="saveRel">Save passcode</button><button class="btn" id="copyLink">Copy link</button></div>
+    <p class="help">Send relatives the link and this passcode. Everything is encrypted before it’s saved to GitHub.</p>` : `<div class="actions"><button class="btn" id="copyLink">Copy link</button></div>`}`);
   $('[data-close]', sh).onclick = closeModal;
 
   if (isEditor()) {
@@ -704,7 +733,7 @@ function openSettings() {
     $('#addCal').onclick = () => {
       const div = document.createElement('div');
       const palette = ['#0891b2', '#db2777', '#65a30d', '#ca8a04', '#4f46e5', '#0d9488'];
-      div.innerHTML = calRow({ id: '', name: '', color: palette[S.cal.calendars.length % palette.length] });
+      div.innerHTML = calRow({ id: '', name: '', shared: true, color: palette[S.cal.calendars.length % palette.length] });
       const row = div.firstElementChild;
       $('#cals').appendChild(row);
       wireRow(row);
@@ -719,7 +748,7 @@ function openSettings() {
         while (used.has(id)) id += '-2';
         used.add(id);
         const feedUrl = $('.feed', row).value.trim();
-        return { id, name, color: $('input[type=color]', row).value, ...(feedUrl ? { feedUrl } : {}) };
+        return { id, name, color: $('input[type=color]', row).value, shared: $('.shared', row).checked, ...(feedUrl ? { feedUrl } : {}) };
       }).filter(Boolean);
       const removed = S.cal.calendars.filter((c) => !cals.some((x) => x.id === c.id));
       let dropEvents = false;
@@ -751,7 +780,14 @@ function openSettings() {
       } catch (err) { toast(err.message, 6000); }
     };
   }
-  $('#saveTok').onclick = () => {
+  if ($('#saveRel')) $('#saveRel').onclick = async () => {
+    const v = $('#relPass').value.trim();
+    if (v && v.length < 6) return toast('Use at least 6 characters');
+    if (v && v === S.pass) return toast('Use a different passcode than your own');
+    try { await saveCal((d) => { if (v) d.relativesPass = v; else delete d.relativesPass; }, 'Update extended family access'); closeModal(); toast(v ? 'Saved — relatives can open it in about a minute' : 'Extended family access turned off', 4000); }
+    catch (err) { toast(err.message, 5000); }
+  };
+  if ($('#saveTok')) $('#saveTok').onclick = () => {
     const t = $('#tok').value.trim();
     if (!t) return toast('Paste a token first');
     S.token = t; store.set('token', t); closeModal(); renderMain(); toast('You can now add and import events');
@@ -768,8 +804,8 @@ function openSettings() {
 async function refresh() {
   if (!S.pass || !$('#modal').classList.contains('hidden')) return;
   try {
-    const f = await readFile(CAL_FILE);
-    if (f.text) { S.cal = await decryptJSON(f.text, S.pass); S.calSalt = saltOf(f.text); }
+    const f = await readFile(S.relative ? SHARED_FILE : CAL_FILE);
+    if (f.text) { S.cal = await decryptJSON(f.text, S.pass); if (!S.relative) S.calSalt = saltOf(f.text); }
     await loadFeeds();
     S.loadedAt = Date.now();
     renderMain();

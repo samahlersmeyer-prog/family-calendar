@@ -38,6 +38,9 @@ for (const c of cal.calendars.filter((c) => c.feedUrl)) {
   }
 }
 
+const isShared = (c) => c.shared ?? c.id !== 'family';
+const sharedIds = new Set(cal.calendars.filter(isShared).map((c) => c.id));
+
 const strip = (s) => Object.fromEntries(Object.entries(s).map(([k, v]) => [k, { ...v, at: undefined }]));
 const same = prev && JSON.stringify(prev.events) === JSON.stringify(events) && JSON.stringify(strip(prev.status || {})) === JSON.stringify(strip(status));
 
@@ -50,4 +53,31 @@ if (same && !stale) {
   for (const k in status) status[k].at = now;
   await writeFile('data/feeds.enc', await encryptJSON({ updated: now, status, events }, pass));
   console.log(`Saved ${events.length} feed events.`);
+}
+
+// Extended family: a separate copy with only the shared calendars, under their own passcode.
+const rel = cal.relativesPass;
+if (rel) {
+  const sharedCal = {
+    title: cal.title,
+    calendars: cal.calendars.filter(isShared).map(({ id, name, color }) => ({ id, name, color })),
+    events: cal.events.filter((e) => sharedIds.has(e.cal)),
+  };
+  let old = null;
+  try { old = await decryptJSON(await readFile('data/shared.enc', 'utf8'), rel); } catch {}
+  if (JSON.stringify(old) !== JSON.stringify(sharedCal)) {
+    await writeFile('data/shared.enc', await encryptJSON(sharedCal, rel));
+    console.log(`Extended family: ${sharedCal.events.length} events on ${sharedCal.calendars.length} calendars.`);
+  }
+  const sharedFeeds = { events: events.filter((e) => sharedIds.has(e.cal)), status: {} };
+  let oldF = null;
+  try { oldF = await decryptJSON(await readFile('data/feeds-shared.enc', 'utf8'), rel); } catch {}
+  if (JSON.stringify(oldF) !== JSON.stringify(sharedFeeds)) {
+    await writeFile('data/feeds-shared.enc', await encryptJSON(sharedFeeds, rel));
+    console.log(`Extended family feeds: ${sharedFeeds.events.length} events.`);
+  }
+} else {
+  const { rm } = await import('node:fs/promises');
+  await rm('data/shared.enc', { force: true });
+  await rm('data/feeds-shared.enc', { force: true });
 }
