@@ -330,7 +330,7 @@ function renderMain() {
     <div class="row2">
       <div class="seg"><button data-view="list" class="${S.view === 'list' ? 'on' : ''}">List</button><button data-view="month" class="${S.view === 'month' ? 'on' : ''}">Month</button></div>
       <span class="spacer"></span>
-      ${isEditor() ? `<button class="btn" id="btnImport">Import</button>` : ''}
+      ${isEditor() ? `<button class="btn" id="btnEmail">✉︎ Email</button><button class="btn" id="btnImport">Import</button>` : ''}
     </div>
   </header>
   <nav class="chips">${S.cal.calendars.map((c) => `<button class="chip ${S.hidden.has(c.id) ? 'off' : ''}" data-cal="${esc(c.id)}"><i style="background:${esc(c.color)}"></i>${esc(c.name)}</button>`).join('')}</nav>
@@ -346,6 +346,7 @@ function renderMain() {
   $('#btnSettings').onclick = openSettings;
   if (isEditor()) {
     $('#btnImport').onclick = () => openImport();
+    $('#btnEmail').onclick = () => openImport(null, 'email');
     $('#btnAdd').onclick = () => openEdit(null, S.view === 'month' ? S.day : todayWall());
   }
   S.view === 'month' ? renderMonth() : renderList();
@@ -549,21 +550,27 @@ function guessCal(name) {
   return hit?.id || store.get('lastCal') || 'family';
 }
 
-function openImport(files) {
+function openImport(files, tab = 'file') {
   const sh = openModal(`
     <div class="head"><div><h2>Import events</h2><p class="help">Calendar files (.ics), schedule PDFs, or text copied from an email or team website.</p></div>
       <button class="btn icon ghost" data-close aria-label="Close">✕</button></div>
-    <div class="seg"><button class="on" data-tab="file">File</button><button data-tab="text">Paste text</button></div>
+    <div class="seg"><button data-tab="file">File</button><button data-tab="text">Paste text</button><button data-tab="email">Email</button></div>
     <div data-pane="file"><label class="dropzone"><input type="file" id="files" accept=".ics,.ical,.ifb,.pdf,text/calendar,application/pdf" multiple hidden>
       <b>Tap to choose files</b><br>or drag .ics / PDF files anywhere on the page</label></div>
     <div data-pane="text" class="hidden"><textarea class="in" id="paste" placeholder="Paste a schedule — one game or practice per line works best"></textarea>
       <div class="actions"><button class="btn primary" id="findText">Find events</button></div></div>
+    <div data-pane="email" class="hidden">${emailPane()}</div>
     <div id="review" class="review"></div>`);
   $('[data-close]', sh).onclick = closeModal;
-  $$('[data-tab]', sh).forEach((b) => (b.onclick = () => {
-    $$('[data-tab]', sh).forEach((x) => x.classList.toggle('on', x === b));
-    $$('[data-pane]', sh).forEach((p) => p.classList.toggle('hidden', p.dataset.pane !== b.dataset.tab));
-  }));
+  const showTab = (t) => {
+    $$('[data-tab]', sh).forEach((x) => x.classList.toggle('on', x.dataset.tab === t));
+    $$('[data-pane]', sh).forEach((p) => p.classList.toggle('hidden', p.dataset.pane !== t));
+    $('#review').innerHTML = '';
+    if (t === 'email' && S.cal.googleClientId) loadGIS().catch(() => {});
+  };
+  $$('[data-tab]', sh).forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
+  showTab(tab);
+  if ($('#scanBtn', sh)) $('#scanBtn', sh).onclick = startEmailScan;
   $('#files', sh).onchange = (e) => handleFiles([...e.target.files]);
   $('#findText', sh).onclick = () => {
     const rows = parseScheduleText($('#paste').value);
@@ -659,6 +666,218 @@ function renderReview({ icsEvents = [], textRows = [], notes = [], label, cal })
   };
 }
 
+/* ---------- email scanning (Gmail, read-only, runs in the browser) ---------- */
+const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me';
+const GMAIL_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
+const MAIL_QUERY = '-category:promotions -category:social (filename:ics OR invite OR invitation OR schedule OR practice OR game OR games OR tournament OR rehearsal OR recital OR program OR concert OR party OR appointment OR "save the date" OR reminder OR choir OR sing OR singing OR "field trip" OR conference OR meet OR tryouts OR banquet OR birthday OR camp OR clinic)';
+
+let gisReady;
+function loadGIS() {
+  return (gisReady ||= new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = 'https://accounts.google.com/gsi/client';
+    s.onload = () => res(window.google);
+    s.onerror = () => { gisReady = null; rej(new Error('Couldn’t reach Google sign-in.')); };
+    document.head.appendChild(s);
+  }));
+}
+
+function emailPane() {
+  if (!S.cal.googleClientId) return `<p class="help" style="margin-top:14px">Email scanning needs a one-time Google setup. Open ⚙︎ Settings → <b>Email scanning</b>.</p>`;
+  const last = +store.get('lastScan') || 0;
+  const since = last ? Math.min(60, Math.max(1, Math.ceil((Date.now() - last) / 864e5) + 1)) : 0;
+  return `<p class="help" style="margin-top:14px">Looks through <b>your</b> Gmail for invites, schedules and events you haven’t reviewed yet. Nothing is added until you check it.</p>
+    <label class="f">Look back</label>
+    <select class="in" id="days">
+      ${since ? `<option value="${since}">Since my last scan (${since} day${since === 1 ? '' : 's'})</option>` : ''}
+      ${[7, 14, 30, 60].map((d) => `<option value="${d}" ${!since && d === 14 ? 'selected' : ''}>Last ${d} days</option>`).join('')}
+    </select>
+    <div class="actions"><button class="btn primary" id="scanBtn">Sign in with Google &amp; scan</button></div>`;
+}
+
+function startEmailScan() {
+  // Must run straight from the tap so the Google sign-in window isn't blocked.
+  const g = window.google?.accounts?.oauth2;
+  if (!g) { loadGIS().catch((e) => toast(e.message, 5000)); return toast('Loading Google sign-in — tap again in a second'); }
+  const client = g.initTokenClient({
+    client_id: S.cal.googleClientId,
+    scope: GMAIL_SCOPE,
+    callback: (r) => (r.error ? toast(r.error_description || 'Google sign-in failed', 5000) : runEmailScan(r.access_token)),
+    error_callback: (e) => toast(e.type === 'popup_closed' ? 'Sign-in was closed' : 'Google sign-in failed — check the Client ID setup', 5000),
+  });
+  client.requestAccessToken();
+}
+
+async function gm(path, token) {
+  const r = await fetch(GMAIL + path, { headers: { Authorization: 'Bearer ' + token } });
+  if (r.status === 401) throw new Error('Google sign-in expired — scan again.');
+  if (r.status === 403) throw new Error('Gmail said no (403). Make sure the Gmail API is enabled and you’re a test user.');
+  if (!r.ok) throw new Error('Gmail error ' + r.status);
+  return r.json();
+}
+const b64url = (s) => new TextDecoder().decode(Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0)));
+const walkParts = (p, out = []) => { p.parts ? p.parts.forEach((x) => walkParts(x, out)) : out.push(p); return out; };
+function htmlToText(h) {
+  const d = new DOMParser().parseFromString(h.replace(/<(br|\/p|\/div|\/tr|\/li|\/h\d|\/td)\b[^>]*>/gi, '\n$&'), 'text/html');
+  d.querySelectorAll('style,script,head').forEach((n) => n.remove());
+  return d.body?.textContent || '';
+}
+function trimBody(t) {
+  const out = [];
+  for (let l of t.replace(/\r/g, '').split('\n')) {
+    if (/^\s*(On .{5,160} wrote:|-{2,}\s*Original Message)/i.test(l)) break; // quoted replies
+    if (/^\s*>/.test(l) || /^\s*(Sent from my|Unsubscribe|To unsubscribe)/i.test(l)) continue;
+    l = l.trim();
+    if (!l) continue;
+    out.push(...(l.length > 160 ? l.split(/(?<=[.!?])\s+/) : [l]));
+    if (out.length > 150) break;
+  }
+  return out.join('\n');
+}
+
+const CAL_HINTS = [
+  [/gamechanger|mad apple/, 'mad-apple'],
+  [/basketball|hoops/, 'hc-basketball'],
+  [/cross country|\bxc\b|nationals/, 'max-xc'],
+  [/baseball|little league|travel ball/, 'theo-baseball'],
+  [/church|choir|\bsing|sunday school|christmas program|chapel|worship|\bvbs\b|youth group/, 'church'],
+];
+function guessCalText(t) {
+  t = t.toLowerCase();
+  for (const [re, id] of CAL_HINTS) if (re.test(t) && S.cal.calendars.some((c) => c.id === id)) return id;
+  const hit = S.cal.calendars.find((c) => c.id !== 'family' && t.includes(c.name.toLowerCase()));
+  return hit?.id || 'family';
+}
+
+async function extractMail(m, token) {
+  const h = Object.fromEntries((m.payload?.headers || []).map((x) => [x.name.toLowerCase(), x.value]));
+  const subject = (h.subject || '(no subject)').trim();
+  const from = (h.from || '').replace(/<[^>]*>/, '').replace(/"/g, '').trim();
+  const items = [];
+  let plain = '', html = '';
+  for (const p of walkParts(m.payload || {})) {
+    const mt = (p.mimeType || '').toLowerCase(), fn = (p.filename || '').toLowerCase();
+    if (mt === 'text/calendar' || fn.endsWith('.ics')) {
+      let data = p.body?.data;
+      if (!data && p.body?.attachmentId) data = (await gm(`/messages/${m.id}/attachments/${p.body.attachmentId}`, token)).data;
+      if (data) for (const ev of parseICS(b64url(data), { calId: 'tmp', source: 'email', pastDays: 0 })) items.push({ kind: 'ics', ev });
+    } else if (!p.filename && p.body?.data) {
+      if (mt === 'text/plain') plain += b64url(p.body.data) + '\n';
+      else if (mt === 'text/html') html += b64url(p.body.data) + '\n';
+    }
+  }
+  const guess = guessCalText(`${subject} ${from} ${(plain || htmlToText(html)).slice(0, 800)}`);
+  if (!items.length) {
+    const today = todayWall(), keys = new Set();
+    const cleanSubject = subject.replace(/^((re|fwd?|fw):\s*)+/i, '').slice(0, 70);
+    for (const r of parseScheduleText(cleanSubject + '\n' + trimBody(plain || htmlToText(html)))) {
+      if (r.date < today || r.date > addDays(today, 400)) continue;
+      const k = r.date + '|' + r.time;
+      if (keys.has(k)) continue;
+      keys.add(k);
+      const words = (r.title || '').split(/\s+/).length;
+      const title = r.title && r.title.length >= 3 && words <= 7 ? r.title : cleanSubject;
+      items.push({ kind: 'txt', row: { ...r, title } });
+      if (items.length >= 8) break;
+    }
+  }
+  return { id: m.id, subject, from, items, guess };
+}
+
+async function runEmailScan(token) {
+  const review = $('#review');
+  const days = +($('#days')?.value || 14);
+  review.innerHTML = `<p class="muted">Searching your email…</p>`;
+  try {
+    const seen = new Set(JSON.parse(store.get('seenMail') || '[]'));
+    const list = await gm(`/messages?maxResults=80&q=${encodeURIComponent(`newer_than:${days}d ${MAIL_QUERY}`)}`, token);
+    const ids = (list.messages || []).map((m) => m.id).filter((id) => !seen.has(id));
+    const found = [];
+    for (let i = 0; i < ids.length; i++) {
+      review.innerHTML = `<p class="muted">Reading email ${i + 1} of ${ids.length}…</p>`;
+      const mail = await extractMail(await gm(`/messages/${ids[i]}?format=full`, token), token);
+      if (mail.items.length) found.push(mail);
+    }
+    store.set('lastScan', String(Date.now()));
+    renderEmailReview(found, ids);
+  } catch (e) {
+    review.innerHTML = `<p class="bad help">${esc(e.message)}</p>`;
+  }
+}
+
+function markSeen(ids) {
+  const seen = JSON.parse(store.get('seenMail') || '[]');
+  store.set('seenMail', JSON.stringify([...seen, ...ids].slice(-1500)));
+}
+
+function renderEmailReview(found, ids) {
+  const review = $('#review');
+  const existing = new Set(allEvents().map((e) => e.title.toLowerCase() + '|' + e.start));
+  if (!found.length) {
+    markSeen(ids);
+    review.innerHTML = `<p class="muted">${ids.length ? `Checked ${ids.length} new email${ids.length === 1 ? '' : 's'} — no upcoming events found.` : 'No new emails to check.'}</p>`;
+    return;
+  }
+  const rowOf = (it) => it.kind === 'ics'
+    ? { title: it.ev.title, date: it.ev.start.slice(0, 10), time: it.ev.allDay ? '' : it.ev.start.slice(11, 16), location: it.ev.location }
+    : { title: it.row.title, date: it.row.date, time: it.row.time || '', location: it.row.location || '' };
+  review.innerHTML = `
+    <h4>Events in ${found.length} email${found.length === 1 ? '' : 's'}</h4>
+    <p class="help">Calendar invites are pre-checked. For the rest, check what’s real and fix anything that looks off — each row can go to a different calendar.</p>
+    <div id="rows">${found.map((f, mi) => `
+      <div class="mail"><div class="mailhead"><b>${esc(f.subject)}</b><small>${esc(f.from)}</small></div>
+      ${f.items.map((it, ii) => {
+        const r = rowOf(it);
+        const dupe = existing.has(r.title.toLowerCase() + '|' + (r.time ? `${r.date}T${r.time}` : r.date));
+        return `<div class="rrow" data-m="${mi}" data-i="${ii}"><input type="checkbox" ${it.kind === 'ics' && !dupe ? 'checked' : ''}>
+          <div class="fields">
+            <input class="in full" data-f="title" value="${esc(r.title)}" placeholder="Title">
+            <input class="in" type="date" data-f="date" value="${r.date}">
+            <input class="in" type="time" data-f="time" value="${r.time}">
+            <input class="in full" data-f="location" value="${esc(r.location)}" placeholder="Where (optional)">
+            <select class="in full" data-f="cal">${calOptions(f.guess)}</select>
+          </div>
+          ${dupe ? `<div class="src">Already on the calendar</div>` : it.kind === 'txt' ? `<div class="src">From: “${esc(it.row.line.slice(0, 120))}”</div>` : ''}</div>`;
+      }).join('')}</div>`).join('')}
+    </div>
+    <div class="actions"><button class="btn primary" id="addAll">Add events</button><button class="btn" id="skipAll">None of these</button></div>`;
+  const btn = $('#addAll');
+  const count = () => { const n = $$('#rows .rrow > input:checked').length; btn.textContent = n ? `Add ${n} event${n === 1 ? '' : 's'}` : 'Add events'; btn.disabled = !n; };
+  $$('#rows .rrow > input').forEach((c) => (c.onchange = count));
+  count();
+  $('#skipAll').onclick = () => { markSeen(ids); closeModal(); toast('Okay — those emails won’t show up again'); };
+  btn.onclick = async () => {
+    const out = [];
+    for (const row of $$('#rows .rrow')) {
+      if (!$('input[type=checkbox]', row).checked) continue;
+      const it = found[+row.dataset.m].items[+row.dataset.i];
+      const v = (f) => $(`[data-f=${f}]`, row).value.trim();
+      const calId = v('cal'), title = v('title') || 'Event', date = v('date'), time = v('time');
+      if (!validDate(date)) continue;
+      const start = time ? `${date}T${time}` : date;
+      let end;
+      if (it.kind === 'ics') {
+        const mins = (Date.parse((it.ev.end.includes('T') ? it.ev.end : it.ev.end + 'T00:00') + 'Z') - Date.parse((it.ev.start.includes('T') ? it.ev.start : it.ev.start + 'T00:00') + 'Z')) / 60000;
+        end = time ? addMinutes(start, mins > 0 && it.ev.start.includes('T') ? mins : 60) : addDays(date, Math.max(1, Math.round(mins / 1440)) || 1);
+      } else end = !time ? addDays(date, 1) : it.row.endTime && it.row.time === time ? `${date}T${it.row.endTime}` : addMinutes(start, 60);
+      if (end <= start) end = addMinutes(start, 60);
+      out.push({ id: hashId(calId + '|' + start + '|' + title), cal: calId, title, start, end, allDay: !time, location: v('location'),
+        notes: it.kind === 'ics' ? it.ev.notes : `From email: ${found[+row.dataset.m].subject}`, source: 'email' });
+    }
+    btn.disabled = true; btn.textContent = 'Saving…';
+    try {
+      let added = 0;
+      await saveCal((d) => {
+        const have = new Set(d.events.map((e) => e.id));
+        for (const e of out) if (!have.has(e.id)) { d.events.push(e); added++; }
+      }, `Add ${out.length} events from email`);
+      markSeen(ids);
+      closeModal();
+      toast(`Added ${added} event${added === 1 ? '' : 's'} from email`);
+    } catch (err) { count(); toast(err.message, 5000); }
+  };
+}
+
 /* ---------- drag & drop anywhere ---------- */
 let dragDepth = 0;
 const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes('Files');
@@ -718,6 +937,12 @@ function openSettings() {
     <div class="actions">${S.relative ? '' : `<button class="btn" id="saveTok">${S.token ? 'Update token' : 'Become an editor'}</button>
       ${S.token ? `<button class="btn ghost" id="dropTok">Remove token</button>` : ''}`}
       <button class="btn ghost danger" id="lockBtn">Lock this device</button></div>
+
+    ${isEditor() ? `<h4>Email scanning (you two only)</h4>
+    <p class="help">Lets each editor scan their own Gmail from their own phone. Needs a one-time Google setup — paste the <b>Client ID</b> here. Relatives never see this.</p>
+    <label class="f">Google OAuth Client ID</label>
+    <input class="in" id="gcid" autocomplete="off" value="${esc(S.cal.googleClientId || '')}" placeholder="1234…apps.googleusercontent.com">
+    <div class="actions"><button class="btn" id="saveGcid">Save</button></div>` : ''}
 
     ${isEditor() ? `<h4>Extended family</h4>
     <p class="help">Relatives get their own passcode and only see calendars marked “Extended family can see” (sports, church, etc.). Your Family calendar stays private. Updates reach them about a minute after you save.</p>
@@ -780,6 +1005,12 @@ function openSettings() {
       } catch (err) { toast(err.message, 6000); }
     };
   }
+  if ($('#saveGcid')) $('#saveGcid').onclick = async () => {
+    const v = $('#gcid').value.trim();
+    if (v && !/\.apps\.googleusercontent\.com$/.test(v)) return toast('That doesn’t look like a Client ID (ends in .apps.googleusercontent.com)', 5000);
+    try { await saveCal((d) => { if (v) d.googleClientId = v; else delete d.googleClientId; }, 'Update email scanning'); closeModal(); toast(v ? 'Email scanning is on — tap ✉︎ Scan email' : 'Email scanning turned off', 4000); }
+    catch (err) { toast(err.message, 5000); }
+  };
   if ($('#saveRel')) $('#saveRel').onclick = async () => {
     const v = $('#relPass').value.trim();
     if (v && v.length < 6) return toast('Use at least 6 characters');

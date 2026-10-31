@@ -117,3 +117,8 @@ code { background: var(--soft); padding: 1px 5px; border-radius: 5px; font-size:
 .drop { position: fixed; inset: 0; z-index: 30; background: rgba(230, 57, 70, .14); border: 3px dashed var(--accent); display: grid; place-items: center; font-weight: 800; font-size: 20px; color: var(--accent); pointer-events: none; }
 .toast { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 40; background: var(--ink); color: var(--bg); padding: 11px 18px; border-radius: 999px; font-size: 14px; font-weight: 600; box-shadow: var(--shadow); max-width: calc(100% - 32px); text-align: center; }
 .fab { position: fixed; right: 18px; bottom: calc(22px + env(safe-area-inset-bottom)); width: 56px; height: 56px; border-radius: 50%; border: 0; background: var(--accent); color: #fff; font-size: 30px; line-height: 1; box-shadow: var(--shadow); z-index: 6; }
+
+.mail { border-top: 2px solid var(--line); padding-top: 10px; margin-top: 10px; }
+.mailhead b { display: block; font-size: 15px; }
+.mailhead small { color: var(--muted); font-size: 13px; }
+.seg + [data-pane] { margin-top: 4px; }
