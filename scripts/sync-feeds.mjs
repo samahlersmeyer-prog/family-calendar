@@ -61,7 +61,7 @@ if (rel) {
   const sharedCal = {
     title: cal.title,
     calendars: cal.calendars.filter(isShared).map(({ id, name, color }) => ({ id, name, color })),
-    events: cal.events.filter((e) => sharedIds.has(e.cal)),
+    events: cal.events.filter((e) => sharedIds.has(e.cal) && !e.private),
   };
   let old = null;
   try { old = await decryptJSON(await readFile('data/shared.enc', 'utf8'), rel); } catch {}

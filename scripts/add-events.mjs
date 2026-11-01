@@ -34,7 +34,7 @@ for (const e of input) {
   const id = hashId(calId + '|' + start + '|' + e.title);
   if (ids.has(id)) { skipped++; continue; }
   ids.add(id);
-  cal.events.push({ id, cal: calId, title: e.title, start, end, allDay, location: e.location || '', notes: e.notes || '', source: e.source || 'email' });
+  cal.events.push({ id, cal: calId, title: e.title, start, end, allDay, location: e.location || '', notes: e.notes || '', source: e.source || 'email', ...(e.private ? { private: true } : {}) });
   added++;
 }
 cal.updated = new Date().toISOString();

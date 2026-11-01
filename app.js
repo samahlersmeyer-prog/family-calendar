@@ -1,8 +1,8 @@
-import { encryptJSON, decryptJSON, saltOf } from './lib/crypto.js?v=4';
-import { parseICS, hashId } from './lib/ics.js?v=4';
-import { parseScheduleText } from './lib/schedule-text.js?v=4';
-import { todayWall, addDays, addMinutes, dow, validDate } from './lib/tz.js?v=4';
-import { WORKFLOW_PATH, WORKFLOW_YML } from './lib/workflow.js?v=4';
+import { encryptJSON, decryptJSON, saltOf } from './lib/crypto.js?v=5';
+import { parseICS, hashId } from './lib/ics.js?v=5';
+import { parseScheduleText } from './lib/schedule-text.js?v=5';
+import { todayWall, addDays, addMinutes, dow, validDate } from './lib/tz.js?v=5';
+import { WORKFLOW_PATH, WORKFLOW_YML } from './lib/workflow.js?v=5';
 
 /* ---------- config ---------- */
 const CONFIG = (() => {
@@ -319,7 +319,7 @@ function evRow(e) {
   const sub = [e.location, c.name].filter(Boolean).join(' · ');
   return `<button class="ev" data-ev="${esc(e.id)}"><span class="bar" style="background:${esc(c.color)}"></span>
     <span class="t">${t}${end ? `<small>${end}</small>` : ''}</span>
-    <span class="b"><b>${esc(e.title)}</b><small>${esc(sub)}</small></span></button>`;
+    <span class="b"><b>${e.private && !S.relative ? '🔒 ' : ''}${esc(e.title)}</b><small>${esc(sub)}</small></span></button>`;
 }
 
 /* ---------- main screen ---------- */
@@ -448,6 +448,7 @@ function openDetail(id) {
       <div>🗓 ${esc(when)}</div>
       ${e.location ? `<div>📍 <a href="https://maps.apple.com/?q=${encodeURIComponent(e.location)}" target="_blank" rel="noopener">${esc(e.location)}</a></div>` : ''}
       ${e.notes ? `<div class="notes">${esc(e.notes)}</div>` : ''}
+      ${e.private && !S.relative ? `<div class="help">🔒 Only you two — extended family doesn’t see this</div>` : ''}
       ${fromFeed ? `<div class="help">Synced from the team’s calendar — changes come from the team app.</div>` : ''}
     </div>
     ${isEditor() && !fromFeed ? `<div class="actions"><button class="btn" id="edit">Edit</button><button class="btn danger" id="del">Delete</button></div>` : ''}`);
@@ -479,6 +480,7 @@ function openEdit(e, day) {
       <div class="two"><div><label class="f">Date</label><input class="in" type="date" name="date" value="${d}" required></div>
         <div class="alld ${e.allDay ? '' : 'hidden'}"><label class="f">Through</label><input class="in" type="date" name="last" value="${lastDay}"></div></div>
       <label class="check"><input type="checkbox" name="allDay" ${e.allDay ? 'checked' : ''}> All day</label>
+      <label class="check"><input type="checkbox" name="priv" ${e.private ? 'checked' : ''}> Only us (hide from extended family)</label>
       <div class="two timed ${e.allDay ? 'hidden' : ''}"><div><label class="f">Starts</label><input class="in" type="time" name="st" value="${e.allDay ? '18:00' : e.start.slice(11, 16)}"></div>
         <div><label class="f">Ends</label><input class="in" type="time" name="et" value="${!e.allDay && e.end ? e.end.slice(11, 16) : ''}"></div></div>
       <label class="f">Where</label><input class="in" name="location" value="${esc(e.location)}">
@@ -502,6 +504,7 @@ function openEdit(e, day) {
       if (end <= start) end = addDays(end, 1);
     }
     const out = { ...e, id: e.id || newId(), cal: f.cal.value, title: f.title.value.trim(), allDay, start, end, location: f.location.value.trim(), notes: f.notes.value.trim(), source: e.source || 'manual' };
+    if (f.priv.checked) out.private = true; else delete out.private;
     store.set('lastCal', out.cal);
     const btn = $('button.primary', f);
     btn.disabled = true; btn.textContent = 'Saving…';
