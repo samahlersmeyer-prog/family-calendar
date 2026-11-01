@@ -1,9 +1,9 @@
-import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=13';
-import { parseICS, hashId } from './lib/ics.js?v=13';
-import { parseScheduleText } from './lib/schedule-text.js?v=13';
-import { todayWall, addDays, addMinutes, dow, validDate, utcToWall } from './lib/tz.js?v=13';
-import { classifyMail, scoreRow, mergeRows, splitSentences, KEEP_SCORE, CHECK_SCORE, EVENT } from './lib/mail-filter.js?v=13';
-import { initCloud } from './lib/cloud.js?v=13';
+import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=14';
+import { parseICS, hashId } from './lib/ics.js?v=14';
+import { parseScheduleText } from './lib/schedule-text.js?v=14';
+import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=14';
+import { classifyMail, scoreRow, mergeRows, splitSentences, KEEP_SCORE, CHECK_SCORE, EVENT } from './lib/mail-filter.js?v=14';
+import { initCloud } from './lib/cloud.js?v=14';
 
 /* ---------- config ---------- */
 const CONFIG = { owner: 'samahlersmeyer-prog', repo: 'family-calendar', branch: 'main' };
@@ -60,6 +60,9 @@ const S = {
   inbox: { events: [] },
   hidden: new Set(JSON.parse(store.get('hidden') || '[]')),
   view: store.get('view') || (innerWidth < 760 ? 'list' : 'month'),
+  kid: store.get('kid') || '',
+  week: null,
+  rides: {},
   month: todayWall().slice(0, 7),
   day: todayWall(),
   loadedAt: 0,
@@ -108,6 +111,11 @@ async function loadFeeds() {
 async function loadInbox() {}
 
 /* ---------- boot / sign-in ---------- */
+// Home Screen app: works offline after the first visit.
+if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+addEventListener('offline', () => toast('No signal — showing the saved calendar', 4000));
+addEventListener('online', () => toast('Back online', 2000));
+
 async function boot() {
   const m = location.hash.match(/[#&]s=([\w-]{16,})/);
   if (m) { S.space = m[1]; store.set('space', m[1]); } // kept in the URL so a Home Screen icon opens straight to the calendar
@@ -171,6 +179,8 @@ async function start() {
       if (first) { first = false; res(); } else paint();
     }, (err) => { toast('Couldn’t load events: ' + (err.code || err.message), 6000); res(); }));
   });
+  S.rides = {};
+  unsubs.push(cloud.watchRides(S.space, (r) => { S.rides = r || {}; if (!first) paint(); }));
   await loadFeeds();
   S.loadedAt = Date.now();
   renderMain();
@@ -243,13 +253,83 @@ function isLight(hex) {
 }
 const swatch = (c) => `background:${esc(c)};${isLight(c) ? 'box-shadow:inset 0 0 0 1.5px var(--muted);' : ''}`;
 
+/* kids: "show me only Theo" */
+const KIDS = ['Max', 'Theo', 'Junie', 'Louie', 'Josie'];
+const KID_NAMES = { Max: ['Max', 'Maximus'], Theo: ['Theo'], Junie: ['Junie', 'June'], Louie: ['Louie', 'Louis'], Josie: ['Josie', 'Josephine'] };
+const kidsList = () => S.cal.kids || KIDS;
+const kidRe = (k) => new RegExp('\\b(' + (KID_NAMES[k] || [k]).join('|') + ')\\b', 'i');
+const calKid = (c) => (c.kid !== undefined ? c.kid : c.id === 'mad-apple' ? 'Max' : kidsList().find((k) => kidRe(k).test(c.name || '')) || '');
+const titleKid = (t) => kidsList().find((k) => kidRe(k).test(t || '')) || '';
+const eventKid = (e) => calKid(calById(e.cal)) || titleKid(e.title);
+function forKid(e, k) {
+  const ck = calKid(calById(e.cal));
+  if (ck) return ck === k;
+  if (kidRe(k).test(e.title)) return true;
+  return !titleKid(e.title); // family-wide things (no school, family dinner) show for everyone
+}
+
+/* repeating events */
+const REPEATS = { week: 'Every week', '2weeks': 'Every 2 weeks', weekdays: 'Every weekday (Mon–Fri)', day: 'Every day', month: 'Every month (same date)' };
+function nthDate(d0, every, i) {
+  if (every === 'week') return addDays(d0, 7 * i);
+  if (every === '2weeks') return addDays(d0, 14 * i);
+  if (every === 'month') {
+    const [y, m, dd] = d0.split('-').map(Number);
+    const dt = new Date(Date.UTC(y, m - 1 + i, 1));
+    const c = `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dd)}`;
+    return validDate(c) ? c : null; // no Feb 30th
+  }
+  return addDays(d0, i);
+}
+function occurrences(e) {
+  const r = e.repeat;
+  if (!r || !REPEATS[r.every]) return [e];
+  const d0 = e.start.slice(0, 10), t = e.start.slice(10);
+  const len = e.end ? diffMinutes(e.start, e.end) : null;
+  const last = addDays(d0, 730);
+  const until = r.until && r.until >= d0 ? (r.until < last ? r.until : last) : addDays(todayWall(), 400) < last ? addDays(todayWall(), 400) : last;
+  const skip = new Set(r.skip || []);
+  const out = [];
+  for (let i = 0; i < 800; i++) {
+    const d = nthDate(d0, r.every, i);
+    if (d === null) continue;
+    if (d > until) break;
+    if (skip.has(d) || (r.every === 'weekdays' && (dow(d) === 0 || dow(d) === 6))) continue;
+    const start = d + t;
+    out.push({ ...e, id: i === 0 ? e.id : `${e.id}~${d}`, seriesId: e.id, occ: d, start, end: len === null ? e.end : addMinutes(start, len) });
+  }
+  return out;
+}
+const repeatLabel = (r) => (r && REPEATS[r.every] ? REPEATS[r.every] + (r.until ? ` until ${fmtDay(r.until)}` : '') : '');
+const MAYBE_RE = /^\s*(maybe\b|if\b|possible\b)|\bif (they|we|he|she) (win|lose|advance|qualify)/i;
+
+/* who's driving */
+const rideKey = (id) => String(id).replace(/\//g, '_');
+const rideFor = (e) => S.rides[rideKey(e.id)];
+const myName = () => store.get('myName') || (S.user?.name || '').split(' ')[0] || '';
+
+/* two kids in two places at once */
+function overlapMap(evs) {
+  const out = {};
+  const timed = evs.filter((e) => !e.allDay && !e.maybe);
+  for (let i = 0; i < timed.length; i++) for (let j = i + 1; j < timed.length; j++) {
+    const a = timed[i], b = timed[j];
+    const ae = a.end || addMinutes(a.start, 60), be = b.end || addMinutes(b.start, 60);
+    if (!(a.start < be && b.start < ae)) continue;
+    const ka = eventKid(a), kb = eventKid(b);
+    if (!ka || !kb || ka === kb) continue;
+    out[a.id] ||= b.title; out[b.id] ||= a.title;
+  }
+  return out;
+}
+
 function allEvents() {
   const seen = new Set();
   const out = [];
   // A team-feed game that matches a game already on the same calendar that day is merged into it:
   // the feed's time and place win (so changes flow in), the event keeps its title, notes and attachments.
   const manual = new Map();
-  for (const e of S.cal.events) if (!e.allDay && !/practice|indoor/i.test(e.title)) manual.set(e.cal + '|' + e.start.slice(0, 10), e);
+  for (const e of S.cal.events) if (!e.allDay && !e.repeat && !/practice|indoor/i.test(e.title)) manual.set(e.cal + '|' + e.start.slice(0, 10), e);
   const merged = new Map();
   const feeds = [];
   for (const f of S.feeds.events || []) {
@@ -263,9 +343,10 @@ function allEvents() {
     }
     else feeds.push(f);
   }
-  for (const e0 of [...S.cal.events, ...feeds, ...(S.inbox.events || [])]) {
+  for (const e0 of [...S.cal.events.flatMap(occurrences), ...feeds, ...(S.inbox.events || [])]) {
     const e = merged.get(e0.id) || e0;
     if (seen.has(e.id) || S.hidden.has(e.cal)) continue;
+    if (S.kid && !forKid(e, S.kid)) continue;
     seen.add(e.id);
     out.push(e);
   }
@@ -317,7 +398,7 @@ function nextUp() {
   const now = utcToWall(new Date()), today = now.slice(0, 10);
   return allEvents()
     .filter((e) => e.allDay ? (e.end || addDays(e.start, 1)).slice(0, 10) > today && e.start.slice(0, 10) >= today : (e.end || e.start) > now)
-    .filter((e) => !/no school|no indoor|break\b/i.test(e.title))
+    .filter((e) => !e.maybe && !/no school|no indoor|break\b/i.test(e.title))
     .sort((a, b) => a.start.localeCompare(b.start))[0];
 }
 
@@ -325,15 +406,18 @@ function whoChip(c) {
   return `<span class="who"><i style="${swatch(c.color)}"></i>${esc(c.name)}</span>`;
 }
 
-function evRow(e) {
+function evRow(e, ov = {}) {
   const c = calById(e.cal);
+  const ride = rideFor(e);
   const t = e.allDay ? 'All day' : fmtTime(e.start);
   const end = !e.allDay && e.end && e.end.slice(0, 10) === e.start.slice(0, 10) ? fmtTime(e.end) : '';
-  return `<div class="ev" role="button" tabindex="0" data-ev="${esc(e.id)}"><span class="bar" style="${swatch(c.color)}"></span>
+  return `<div class="ev ${e.maybe ? 'maybe' : ''}" role="button" tabindex="0" data-ev="${esc(e.id)}"><span class="bar" style="${swatch(c.color)}"></span>
     <span class="t">${t}${end ? `<small>to ${end}</small>` : ''}</span>
-    <span class="b"><b>${e.private && !S.relative ? '<span class="lock" title="Only you two">🔒</span> ' : ''}${esc(e.title)}</b>
+    <span class="b"><b>${e.maybe ? '<span class="tag">Maybe</span> ' : ''}${e.private && !S.relative ? '<span class="lock" title="Only you two">🔒</span> ' : ''}${esc(e.title)}${e.repeat ? ' <span class="rep" title="Repeats">🔁</span>' : ''}</b>
       ${whoChip(c)}
       ${e.location ? `<a class="where" href="${mapsUrl(e.location)}" target="_blank" rel="noopener" data-stop>📍 ${esc(e.location)}</a>` : ''}
+      ${ride ? `<small class="ride">🚗 ${esc(ride.driver)} driving</small>` : ''}
+      ${ov[e.id] ? `<small class="warn">⚠️ Same time as ${esc(ov[e.id])}</small>` : ''}
       ${e.addedBy ? `<small class="muted">Added by ${esc(e.addedBy)}</small>` : ''}</span></div>`;
 }
 
@@ -341,17 +425,18 @@ function evRow(e) {
 function renderMain() {
   const family = isEditor();
   const canAdd = isEditor() || canFamilyAdd();
-  const day = () => (S.view === 'month' ? S.day : todayWall());
+  const day = () => (S.view === 'month' ? S.day : S.view === 'week' && S.week && S.week > todayWall() ? S.week : todayWall());
   app.innerHTML = `
   <header class="top">
     <div class="row1">
       <div class="brand">${esc(S.cal.title || 'Family Calendar')}</div>
     </div>
     <div class="row2">
-      <div class="seg"><button data-view="list" class="${S.view === 'list' ? 'on' : ''}">Upcoming</button><button data-view="month" class="${S.view === 'month' ? 'on' : ''}">Month</button></div>
+      <div class="seg"><button data-view="list" class="${S.view === 'list' ? 'on' : ''}">Upcoming</button><button data-view="week" class="${S.view === 'week' ? 'on' : ''}">Week</button><button data-view="month" class="${S.view === 'month' ? 'on' : ''}">Month</button></div>
     </div>
   </header>
   ${welcomeBanner()}
+  <nav class="kids" aria-label="Whose schedule">${['', ...kidsList()].map((k) => `<button class="kid ${S.kid === k ? 'on' : ''}" data-kid="${esc(k)}">${k ? esc(k) : 'Everyone'}</button>`).join('')}</nav>
   <nav class="chips" aria-label="Show or hide calendars">${visibleCalendars().map((c) => `<button class="chip ${S.hidden.has(c.id) ? 'off' : ''}" data-cal="${esc(c.id)}"><i style="${swatch(c.color)}"></i>${esc(c.name)}</button>`).join('')}</nav>
   <main id="view"></main>
   <nav class="tabbar" aria-label="Menu">
@@ -361,6 +446,7 @@ function renderMain() {
     <button data-tab="settings"><span>⚙️</span>Settings</button>
   </nav>`;
   $$('[data-view]').forEach((b) => (b.onclick = () => { S.view = b.dataset.view; store.set('view', S.view); renderMain(); }));
+  $$('[data-kid]').forEach((b) => (b.onclick = () => { S.kid = b.dataset.kid; store.set('kid', S.kid || null); renderMain(); }));
   $$('[data-cal]').forEach((b) => (b.onclick = () => {
     const id = b.dataset.cal;
     S.hidden.has(id) ? S.hidden.delete(id) : S.hidden.add(id);
@@ -377,7 +463,7 @@ function renderMain() {
     settings: openSettings,
   };
   $$('[data-tab]', $('.tabbar')).forEach((b) => (b.onclick = () => actions[b.dataset.tab]()));
-  S.view === 'month' ? renderMonth() : renderList();
+  S.view === 'month' ? renderMonth() : S.view === 'week' ? renderWeek() : renderList();
 }
 
 function welcomeBanner() {
@@ -414,7 +500,7 @@ function renderList() {
     const wk = week !== lastWeek && week !== 'This week' ? `<div class="weekhead">${week}</div>` : '';
     lastWeek = week;
     return `${wk}<section class="day"><h3><span class="rel">${esc(label)}</span>${label === fmtDay(d) ? '' : `<span>${['Today', 'Tomorrow'].includes(label) ? dateLine(d) : MONTHS[+d.slice(5, 7) - 1] + ' ' + +d.slice(8)}</span>`}</h3>
-    ${idx[d].map(evRow).join('')}</section>`;
+    ${(() => { const ov = overlapMap(idx[d]); return idx[d].map((e) => evRow(e, ov)).join(''); })()}</section>`;
   }).join('');
   bindEvents(view);
 }
@@ -475,8 +561,35 @@ function renderMonth() {
     $('#daylist').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }));
   const evs = idx[S.day] || [];
-  $('#daylist').innerHTML = `<h3><span class="rel">${esc(dayLabel(S.day))}</span><span>${dateLine(S.day)}</span></h3>${evs.length ? evs.map(evRow).join('') : '<p class="muted">Nothing this day.</p>'}`;
+  const ov = overlapMap(evs);
+  $('#daylist').innerHTML = `<h3><span class="rel">${esc(dayLabel(S.day))}</span><span>${dateLine(S.day)}</span></h3>${evs.length ? evs.map((e) => evRow(e, ov)).join('') : '<p class="muted">Nothing this day.</p>'}`;
   bindEvents($('#daylist'));
+}
+
+function renderWeek() {
+  const view = $('#view');
+  const today = todayWall();
+  S.week ||= addDays(today, -dow(today));
+  const days = Array.from({ length: 7 }, (_, i) => addDays(S.week, i));
+  const idx = indexByDay(days[0], days[6]);
+  const md = (d) => `${MONTHS[+d.slice(5, 7) - 1].slice(0, 3)} ${+d.slice(8)}`;
+  view.innerHTML = `
+    <div class="monthbar">
+      <button class="btn icon" id="prev" aria-label="Previous week">‹</button>
+      <h2>${md(days[0])} – ${md(days[6])}</h2>
+      <button class="btn" id="today">This week</button>
+      <button class="btn icon" id="next" aria-label="Next week">›</button>
+    </div>
+    <div class="week">${days.map((d) => {
+      const evs = idx[d] || [];
+      const ov = overlapMap(evs);
+      return `<section class="day wday ${d === today ? 'today' : ''} ${d < today ? 'past' : ''}"><h3><span class="rel">${d === today ? 'Today' : WEEKDAYS[dow(d)]}</span><span>${md(d)}</span></h3>
+        ${evs.length ? evs.map((e) => evRow(e, ov)).join('') : '<p class="muted nothing">Nothing planned</p>'}</section>`;
+    }).join('')}</div>`;
+  $('#prev').onclick = () => { S.week = addDays(S.week, -7); renderWeek(); };
+  $('#next').onclick = () => { S.week = addDays(S.week, 7); renderWeek(); };
+  $('#today').onclick = () => { S.week = addDays(today, -dow(today)); renderWeek(); };
+  bindEvents(view);
 }
 
 /* ---------- modal ---------- */
@@ -511,6 +624,8 @@ function openDetail(id) {
   const fromFamily = e.cal === 'friends';
   const mine = fromFamily && JSON.parse(store.get('myAdds') || '[]').includes(e.id);
   const canEdit = isEditor() && !fromFeed && !fromFamily;
+  const series = e.seriesId && S.cal.events.find((x) => x.id === e.seriesId);
+  const ride = rideFor(e);
   const canDelete = canEdit || (fromFamily && isEditor());
   const sh = openModal(`
     <div class="head"><div><h2>${esc(e.title)}</h2>${whoChip(c)}</div>
@@ -522,6 +637,11 @@ function openDetail(id) {
       ${e.addedBy ? `<div class="help">Added by ${esc(e.addedBy)}</div>` : ''}
       ${e.private && !S.relative ? `<div class="help">🔒 Only you two — extended family doesn’t see this</div>` : ''}
       ${fromFeed ? `<div class="help">Synced from the team’s calendar — changes come from the team app.</div>` : ''}
+      ${e.maybe ? `<div class="help">❔ <b>Maybe</b> — depends on results. ${isEditor() ? 'Delete it if it doesn’t happen.' : ''}</div>` : ''}
+      ${e.repeat ? `<div class="help">🔁 ${esc(repeatLabel(e.repeat))}</div>` : ''}
+      ${!e.allDay ? `<div class="ridebox" id="ridebox"><span class="k">Who’s driving?</span>
+        ${ride ? `<div class="two"><b class="driver">🚗 ${esc(ride.driver)}</b><button class="btn" id="rideClear">Not anymore</button></div>`
+          : `<div class="two"><input class="in" id="rideName" value="${esc(myName())}" placeholder="Your name" autocomplete="name"><button class="btn" id="rideMe">🙋 I’ll drive</button></div>`}</div>` : ''}
     </div>
     <div class="actions stack">
       ${e.location ? `<a class="btn primary" href="${mapsUrl(e.location)}" target="_blank" rel="noopener">📍 Get directions</a>` : ''}
@@ -538,8 +658,32 @@ function openDetail(id) {
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   };
   $$('[data-att]', sh).forEach((b) => (b.onclick = () => openAttachment(e.attachments[+b.dataset.att])));
-  if (canEdit) $('#edit').onclick = () => openEdit(e);
-  if (canDelete) $('#del').onclick = async () => {
+  const setRide = async (data) => {
+    try { await cloud.setRide(S.space, rideKey(e.id), data); S.rides = { ...S.rides }; if (data) S.rides[rideKey(e.id)] = data; else delete S.rides[rideKey(e.id)]; openDetail(id); S.dirty = true; toast(data ? `Thanks, ${data.driver}!` : 'Cleared'); }
+    catch (err) { toast(/permission/i.test(err.code || err.message) ? 'Driving sign-up isn’t switched on yet — Sam needs to update the database rules.' : err.message, 6000); }
+  };
+  if ($('#rideMe')) $('#rideMe').onclick = () => {
+    const n = $('#rideName').value.trim();
+    if (!n) return $('#rideName').focus();
+    store.set('myName', n);
+    setRide({ driver: n.slice(0, 50), at: Date.now() });
+  };
+  if ($('#rideClear')) $('#rideClear').onclick = () => setRide(null);
+  if (canEdit) $('#edit').onclick = () => openEdit(series || e);
+  if (canDelete && series) $('#del').onclick = () => {
+    const box = $('#del').parentElement;
+    box.innerHTML = `<p class="help" style="width:100%">This repeats. Delete which?</p><button class="btn danger" id="delOne">Just ${esc(fmtDay(e.occ))}</button><button class="btn danger" id="delAll">Every one</button><button class="btn" id="delNo">Cancel</button>`;
+    $('#delNo').onclick = () => openDetail(id);
+    $('#delOne').onclick = async () => {
+      try { await saveCal((d) => { const b = d.events.find((x) => x.id === series.id); if (b) b.repeat = { ...b.repeat, skip: [...new Set([...(b.repeat.skip || []), e.occ])] }; }); closeModal(); toast('Deleted that one'); }
+      catch (err) { toast(err.message, 5000); }
+    };
+    $('#delAll').onclick = async () => {
+      try { await saveCal((d) => { d.events = d.events.filter((x) => x.id !== series.id); }); closeModal(); toast('Deleted the whole series'); }
+      catch (err) { toast(err.message, 5000); }
+    };
+  };
+  else if (canDelete) $('#del').onclick = async () => {
     if (!confirm(`Delete “${e.title}”?`)) return;
     try {
       if (fromFamily) await saveInbox((d) => { d.events = d.events.filter((x) => x.id !== e.id); });
@@ -649,6 +793,10 @@ function openEdit(e, day) {
       <p class="help">The Family calendar is always just you two. Sports, school and church calendars are shared with relatives unless you check this.</p>
       <div class="two timed ${e.allDay ? 'hidden' : ''}"><div><label class="f">Starts</label><input class="in" type="time" name="st" value="${e.allDay ? '18:00' : e.start.slice(11, 16)}"></div>
         <div><label class="f">Ends</label><input class="in" type="time" name="et" value="${!e.allDay && e.end ? e.end.slice(11, 16) : ''}"></div></div>
+      <div class="two"><div><label class="f">Repeats</label><select class="in" name="rep"><option value="">Doesn’t repeat</option>${Object.entries(REPEATS).map(([k, v]) => `<option value="${k}" ${e.repeat?.every === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+        <div class="untilw ${e.repeat ? '' : 'hidden'}"><label class="f">Until <span class="muted">(optional)</span></label><input class="in" type="date" name="until" value="${e.repeat?.until || ''}"></div></div>
+      ${e.repeat ? '<p class="help">Changes apply to every repeat.</p>' : ''}
+      <label class="check"><input type="checkbox" name="maybe" ${e.maybe ? 'checked' : ''}> Maybe — depends on results (e.g. “if they win”)</label>
       <label class="f">Where</label><input class="in" name="location" value="${esc(e.location)}">
       <label class="f">Notes</label><textarea class="in" name="notes" style="min-height:80px">${esc(e.notes)}</textarea>
       <label class="f">Attachments <span class="muted">(schedule, bracket, flyer — PDF or photo)</span></label>
@@ -666,6 +814,7 @@ function openEdit(e, day) {
   f.files.onchange = showNew;
   $('#smartFile').onchange = (ev) => { if (ev.target.files[0]) smartFill(ev.target.files[0], f, pending, showNew); };
   f._smart = (file) => smartFill(file, f, pending, showNew);
+  f.rep.onchange = () => $('.untilw', f).classList.toggle('hidden', !f.rep.value);
   f.allDay.onchange = () => { $('.timed', f).classList.toggle('hidden', f.allDay.checked); $('.alld', f).classList.toggle('hidden', !f.allDay.checked); };
   f.onsubmit = async (ev) => {
     ev.preventDefault();
@@ -682,6 +831,10 @@ function openEdit(e, day) {
     }
     const out = { ...e, id: e.id || newId(), cal: f.cal.value, title: f.title.value.trim(), allDay, start, end, location: f.location.value.trim(), notes: f.notes.value.trim(), source: e.source || 'manual' };
     if (f.priv.checked) out.private = true; else delete out.private;
+    if (f.maybe.checked) out.maybe = true; else delete out.maybe;
+    if (f.rep.value) out.repeat = { every: f.rep.value, ...(f.until.value ? { until: f.until.value } : {}), skip: (e.repeat?.skip || []).filter((d) => d >= date) };
+    else delete out.repeat;
+    delete out.seriesId; delete out.occ;
     store.set('lastCal', out.cal);
     const btn = $('button.primary', f);
     btn.disabled = true; btn.textContent = 'Saving…';
@@ -920,7 +1073,7 @@ function renderReview({ icsEvents = [], textRows = [], notes = [], label, cal })
         let end = !time ? addDays(date, 1) : r.endTime && r.time === time ? `${date}T${r.endTime}` : addMinutes(start, 90);
         if (end <= start) end = addMinutes(start, 90);
         const location = $('[data-f=location]', row).value.trim();
-        out.push({ id: hashId(calId + '|' + start + '|' + title), cal: calId, title, start, end, allDay: !time, location, notes: '', source: 'import' });
+        out.push({ id: hashId(calId + '|' + start + '|' + title), cal: calId, title, start, end, allDay: !time, location, notes: '', source: 'import', ...(MAYBE_RE.test(title) ? { maybe: true } : {}) });
       }
     }
     btn.disabled = true; btn.textContent = 'Saving…';
@@ -939,7 +1092,7 @@ function renderReview({ icsEvents = [], textRows = [], notes = [], label, cal })
 /* ---------- email scanning (Gmail, read-only, runs in the browser) ---------- */
 const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const GMAIL_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
-const MAIL_QUERY = '-category:promotions -category:social -category:forums -in:spam (filename:ics OR invite OR invitation OR schedule OR practice OR game OR games OR tournament OR rehearsal OR recital OR program OR concert OR party OR appointment OR "save the date" OR reminder OR choir OR sing OR singing OR "field trip" OR conference OR meet OR tryouts OR banquet OR birthday OR camp OR clinic)';
+const MAIL_QUERY = '-category:promotions -category:social -category:forums -in:spam (filename:ics OR invite OR invitation OR schedule OR practice OR game OR games OR tournament OR rehearsal OR recital OR program OR concert OR party OR appointment OR "save the date" OR reminder OR choir OR sing OR singing OR "field trip" OR conference OR meet OR tryouts OR banquet OR birthday OR camp OR clinic OR snack OR snacks OR volunteer OR chaperone OR concessions OR signupgenius OR "signed up" OR "sign up" OR "your slot")';
 
 let gisReady;
 function loadGIS() {
@@ -1195,7 +1348,8 @@ function calRow(c) {
     <input class="in name" value="${esc(c.name)}" placeholder="Calendar name" ${ed ? '' : 'disabled'}>
     ${ed ? `<button class="btn icon ghost del" aria-label="Remove">✕</button>` : '<span></span>'}
     ${ed ? `<input class="in feed" value="${esc(c.feedUrl || '')}" placeholder="Team calendar link (GameChanger, SportsYou…) — optional">
-      <label class="check share"><input type="checkbox" class="shared" ${isShared(c) ? 'checked' : ''}> Extended family can see</label>` : ''}
+      <label class="check share"><input type="checkbox" class="shared" ${isShared(c) ? 'checked' : ''}> Extended family can see</label>
+      <label class="kidw">Whose? <select class="in kidsel"><option value="">Everyone / several</option>${kidsList().map((k) => `<option ${calKid(c) === k ? 'selected' : ''}>${esc(k)}</option>`).join('')}</select></label>` : ''}
     ${ed ? feedStatus(c) : ''}
   </div>`;
 }
@@ -1315,7 +1469,7 @@ You'll see the kids' games, school and church events with times, places and dire
       while (used.has(id)) id += '-2';
       used.add(id);
       const feedUrl = $('.feed', row).value.trim();
-      return { id, name, color: $('input[type=color]', row).value, shared: $('.shared', row).checked, ...(feedUrl ? { feedUrl } : {}) };
+      return { id, name, color: $('input[type=color]', row).value, shared: $('.shared', row).checked, kid: $('.kidsel', row).value, ...(feedUrl ? { feedUrl } : {}) };
     }).filter(Boolean);
     const removed = S.cal.calendars.filter((c) => !cals.some((x) => x.id === c.id));
     let dropEvents = false;

@@ -48,6 +48,16 @@ service cloud.firestore {
         allow update, delete: if isEditor(space);
       }
 
+      // "Who's driving?" — anyone with the family link can sign up to drive.
+      match /rides/{eventId} {
+        allow get, list: if true;
+        allow delete: if true;
+        allow create, update: if request.resource.data.keys().hasOnly(['driver', 'at'])
+          && request.resource.data.driver is string
+          && request.resource.data.driver.size() > 0
+          && request.resource.data.driver.size() < 60;
+      }
+
       match /files/{fileId} {
         allow get: if true;
         allow list: if false;
