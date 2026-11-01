@@ -1,9 +1,9 @@
-import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=15';
-import { parseICS, hashId } from './lib/ics.js?v=15';
-import { parseScheduleText } from './lib/schedule-text.js?v=15';
-import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=15';
-import { classifyMail, scoreRow, mergeRows, splitSentences, KEEP_SCORE, CHECK_SCORE, EVENT } from './lib/mail-filter.js?v=15';
-import { initCloud } from './lib/cloud.js?v=15';
+import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=16';
+import { parseICS, hashId } from './lib/ics.js?v=16';
+import { parseScheduleText } from './lib/schedule-text.js?v=16';
+import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=16';
+import { classifyMail, scoreRow, mergeRows, splitSentences, KEEP_SCORE, CHECK_SCORE, EVENT } from './lib/mail-filter.js?v=16';
+import { initCloud } from './lib/cloud.js?v=16';
 
 /* ---------- config ---------- */
 const CONFIG = { owner: 'samahlersmeyer-prog', repo: 'family-calendar', branch: 'main' };
@@ -321,6 +321,22 @@ function overlapMap(evs) {
     out[a.id] ||= b.title; out[b.id] ||= a.title;
   }
   return out;
+}
+
+/* duplicate guard: same day, about the same time, sharing a real word in the title */
+const STOP = new Set(['the', 'and', 'game', 'games', 'lutheran', 'school', 'church', 'with', 'for', 'max', 'theo', 'junie', 'louie', 'josie', 'holy', 'cross', 'crusaders', 'mad', 'apples', '14u', 'maybe', 'they', 'win', 'lose', 'day']);
+const words = (t) => String(t || '').toLowerCase().replace(/\(.*?\)|\bvs\.?|@|–|-/g, ' ').replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter((w) => w.length > 2 && !STOP.has(w));
+function findDuplicate(c, ignoreId) {
+  const d = c.start.slice(0, 10);
+  const cw = new Set(words(c.title));
+  const saveKid = S.kid; S.kid = ''; // look across everyone, even when a kid filter is on
+  const pool = allEvents(); S.kid = saveKid;
+  return pool.find((e) => {
+    if ((ignoreId && (e.id === ignoreId || e.seriesId === ignoreId)) || e.start.slice(0, 10) !== d) return false;
+    if (e.title.trim().toLowerCase() === c.title.trim().toLowerCase()) return true;
+    const near = c.allDay || e.allDay ? c.allDay === e.allDay : Math.abs(diffMinutes(e.start, c.start)) <= 45;
+    return near && words(e.title).some((w) => cw.has(w));
+  });
 }
 
 function allEvents() {
@@ -848,6 +864,13 @@ function openEdit(e, day) {
     delete out.seriesId; delete out.occ;
     store.set('lastCal', out.cal);
     const btn = $('button.primary', f);
+    const dup = isNew && !f.dataset.dupOk && findDuplicate(out);
+    if (dup) {
+      f.dataset.dupOk = '1';
+      $('#smartStatus').innerHTML = `<b class="bad">Looks like this is already on the calendar:</b> ${esc(dup.title)} · ${esc(timeRange(dup))}. Tap Save again to add it anyway.`;
+      $('#smartStatus').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
     btn.disabled = true; btn.textContent = 'Saving…';
     try {
       const added = [];
@@ -866,6 +889,62 @@ function openEdit(e, day) {
   };
 }
 
+/* A printed month calendar photo: use where each word sits. Each note belongs to the day number
+   just above it in the same box, so "Piano 4pm" under "17" becomes "Nov 17 Piano 4pm". */
+function gridFromOcr(d) {
+  const m = (d.text || '').match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(20\d\d)\b/i);
+  if (!m || !d.words?.length) return null;
+  const mon = m[1].slice(0, 3);
+  const isNum = (w) => /^\d{1,2}$/.test(w.text) && +w.text >= 1 && +w.text <= 31;
+  const nums = d.words.filter(isNum);
+  if (!nums.length) return null;
+  const skip = /^(sun|mon|tue|wed|thu|fri|sat|sunday|monday|tuesday|wednesday|thursday|friday|saturday|20\d\d)$|^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*$/i;
+  const out = [];
+  for (const line of d.lines || []) {
+    const ws = (line.words || []).filter((w) => !isNum(w) && !skip.test(w.text.replace(/[^\w]/g, '')));
+    if (!ws.length) continue;
+    // split a line into pieces wherever there's a big gap (different boxes)
+    const h = Math.max(10, ...ws.map((w) => w.bbox.y1 - w.bbox.y0));
+    const segs = [];
+    for (const w of ws) {
+      const last = segs[segs.length - 1];
+      if (last && w.bbox.x0 - last.x1 < h * 2) { last.text += ' ' + w.text; last.x1 = w.bbox.x1; }
+      else segs.push({ text: w.text, x0: w.bbox.x0, x1: w.bbox.x1, y0: w.bbox.y0 });
+    }
+    for (const sg of segs) {
+      if (sg.text.replace(/[^a-z]/gi, '').length < 3) continue;
+      let best = null, score = Infinity;
+      for (const n of nums) {
+        const dy = sg.y0 - n.bbox.y1, dx = Math.abs(sg.x0 - n.bbox.x0);
+        if (dy < -4 || dy > h * 12 || dx > h * 6) continue;
+        const sc = dy + dx * 2;
+        if (sc < score) { score = sc; best = n; }
+      }
+      if (best) out.push(`${mon} ${best.text} ${sg.text}`);
+    }
+  }
+  return out.length ? out.join('\n') : null;
+}
+
+/* A wall/month calendar reads as "NOVEMBER 2026" then rows like "12 Piano 4pm  13 Dentist 9am".
+   Turn each "day-number + words" piece into "Nov 12 Piano 4pm" so the normal parser can read it. */
+function gridToLines(text) {
+  const m = text.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(20\d\d)\b/i);
+  if (!m) return text;
+  const mon = m[1].slice(0, 3);
+  const out = [];
+  for (const line of text.split('\n')) {
+    if (/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}\b|\d{1,2}\/\d{1,2}/i.test(line)) { out.push(line); continue; }
+    // split a grid row into cells that start with a day number
+    const cells = line.split(/\s{2,}|\t|\|/).map((c) => c.trim()).filter(Boolean);
+    for (const c of cells) {
+      const d = c.match(/^(\d{1,2})\b\s*(.*)$/);
+      if (d && +d[1] >= 1 && +d[1] <= 31 && d[2].length >= 3 && !/^\s*(am|pm|:)/i.test(d[2])) out.push(`${mon} ${d[1]} ${d[2]}`);
+    }
+  }
+  return out.join('\n');
+}
+
 /* ---------- read a dropped file into the Add form ---------- */
 let ocrReady;
 const loadOCR = () => (ocrReady ||= new Promise((res, rej) => {
@@ -877,7 +956,7 @@ const loadOCR = () => (ocrReady ||= new Promise((res, rej) => {
 async function ocr(source, status) {
   const T = await loadOCR();
   const r = await T.recognize(source, 'eng', { logger: (m) => { if (m.status === 'recognizing text') status(`Reading the picture… ${Math.round(m.progress * 100)}%`); } });
-  return r.data.text || '';
+  return gridFromOcr(r.data) || r.data.text || '';
 }
 async function pdfPageImage(file) {
   const pdfjs = await loadPdfJs();
@@ -913,7 +992,7 @@ async function smartFill(file, f, pending, showNew) {
       text = await ocr(file, status);
     } else return status('Drop a PDF, a picture or a calendar invite (.ics).', true);
 
-    const rows = mergeRows(parseScheduleText(splitSentences(text), { base: todayWall() })).filter((r) => r.date >= todayWall());
+    const rows = mergeRows(parseScheduleText(splitSentences(gridToLines(text)), { base: todayWall() })).filter((r) => r.date >= todayWall());
     if (rows.length > 3) return offerSchedule(f, rows.length, () => { openImport(); renderReview({ textRows: rows, label: file.name, cal: guessCalText(text) || 'family' }); });
     if (!rows.length) {
       status('I couldn’t find a date in it — fill in the details and it’ll be attached.', true);
@@ -986,11 +1065,11 @@ function guessCal(name) {
 
 function openImport(files, tab = 'file') {
   const sh = openModal(`
-    <div class="head"><div><h2>Import events</h2><p class="help">Calendar files (.ics), schedule PDFs, or text copied from an email or team website.</p></div>
+    <div class="head"><div><h2>Import events</h2><p class="help">Invites, schedule PDFs, flyers, photos and screenshots — or text copied from an email or team website.</p></div>
       <button class="btn icon ghost" data-close aria-label="Close">✕</button></div>
     <div class="seg"><button data-tab="file">File</button><button data-tab="text">Paste text</button><button data-tab="email">Email</button></div>
-    <div data-pane="file"><label class="dropzone"><input type="file" id="files" accept=".ics,.ical,.ifb,.pdf,text/calendar,application/pdf" multiple hidden>
-      <b>Tap to choose files</b><br>or drag .ics / PDF files anywhere on the page</label></div>
+    <div data-pane="file"><label class="dropzone"><input type="file" id="files" accept=".ics,.ical,.ifb,.pdf,text/calendar,application/pdf,image/*" multiple hidden>
+      <b>Tap to choose files or take a photo</b><br>Calendar invites, schedule PDFs, flyers, screenshots, or a photo of a printed calendar</label></div>
     <div data-pane="text" class="hidden"><textarea class="in" id="paste" placeholder="Paste a schedule — one game or practice per line works best"></textarea>
       <div class="actions"><button class="btn primary" id="findText">Find events</button></div></div>
     <div data-pane="email" class="hidden">${emailPane()}</div>
@@ -1022,16 +1101,15 @@ async function handleFiles(files) {
     try {
       if (/\.(ics|ical|ifb)$/.test(name) || f.type === 'text/calendar') {
         icsEvents.push(...parseICS(await f.text(), { calId: 'tmp', source: 'ics', pastDays: 1 }));
-      } else if (name.endsWith('.pdf') || f.type === 'application/pdf') {
-        const text = await pdfText(f);
-        if (text.replace(/\s/g, '').length < 20) { notes.push(`${f.name} looks like a scanned image — send it to Claude in chat and it can read it for you.`); continue; }
-        const rows = parseScheduleText(text);
-        if (!rows.length) notes.push(`No dates found in ${f.name}. Try “Paste text”, or send it to Claude.`);
+      } else if (name.endsWith('.pdf') || f.type === 'application/pdf' || /^image\//.test(f.type)) {
+        const say = (t) => { review.innerHTML = `<p class="muted">${esc(t)}</p>`; };
+        let text = /^image\//.test(f.type) ? '' : await pdfText(f);
+        if (text.replace(/\s/g, '').length < 20) text = await ocr(/^image\//.test(f.type) ? f : await pdfPageImage(f), say);
+        const rows = mergeRows(parseScheduleText(gridToLines(text), { base: todayWall() }));
+        if (!rows.length) notes.push(`I couldn’t find dates in ${f.name}. Handwriting and busy wall calendars are hard to read automatically — send the photo to Claude in chat and it’ll add them.`);
         textRows.push(...rows);
-      } else if (/^image\//.test(f.type)) {
-        notes.push(`${f.name} is a picture — send screenshots to Claude in chat and it’ll add the events.`);
       } else {
-        notes.push(`${f.name}: only .ics and PDF files can be imported here.`);
+        notes.push(`${f.name}: drop a calendar invite (.ics), a PDF, or a photo/screenshot.`);
       }
     } catch (e) { notes.push(`${f.name}: ${e.message}`); }
   }
@@ -1048,15 +1126,15 @@ function renderReview({ icsEvents = [], textRows = [], notes = [], label, cal })
     <label class="f">Add to calendar</label><select class="in" id="rcal">${calOptions(cal)}</select>
     <p class="help">Uncheck anything you don’t want, and fix titles or times before adding.</p>
     <div id="rows">
-      ${icsEvents.map((e, i) => `<label class="rrow ics"><input type="checkbox" data-i="${i}" data-k="ics" checked>
-        <span><b>${esc(e.title)}</b><br><span class="muted">${fmtDay(e.start.slice(0, 10))}${e.allDay ? '' : ' · ' + fmtTime(e.start)}${e.location ? ' · ' + esc(e.location) : ''}</span></span></label>`).join('')}
-      ${textRows.map((r, i) => `<div class="rrow"><input type="checkbox" data-i="${i}" data-k="txt" ${r.title ? 'checked' : ''}>
+      ${icsEvents.map((e, i) => { const dup = findDuplicate(e); return `<label class="rrow ics"><input type="checkbox" data-i="${i}" data-k="ics" ${dup ? '' : 'checked'}>
+        <span><b>${esc(e.title)}</b><br><span class="muted">${fmtDay(e.start.slice(0, 10))}${e.allDay ? '' : ' · ' + fmtTime(e.start)}${e.location ? ' · ' + esc(e.location) : ''}</span>${dup ? `<br><span class="dup">Already on the calendar: ${esc(dup.title)}</span>` : ''}</span></label>`; }).join('')}
+      ${textRows.map((r, i) => { const dup = findDuplicate({ title: r.title, start: r.time ? `${r.date}T${r.time}` : r.date, allDay: !r.time }); return `<div class="rrow"><input type="checkbox" data-i="${i}" data-k="txt" ${r.title && !dup ? 'checked' : ''}>${dup ? `<div class="dup full">Already on the calendar: ${esc(dup.title)}</div>` : ''}
         <div class="fields">
           <input class="in full" data-f="title" value="${esc(r.title)}" placeholder="Title">
           <input class="in" type="date" data-f="date" value="${r.date}">
           <input class="in" type="time" data-f="time" value="${r.time || ''}">
           <input class="in full" data-f="location" value="${esc(r.location || '')}" placeholder="Where (optional)">
-        </div><div class="src">From: “${esc(r.line.slice(0, 120))}”</div></div>`).join('')}
+        </div><div class="src">From: “${esc(r.line.slice(0, 120))}”</div></div>`; }).join('')}
     </div>
     <div class="actions"><button class="btn primary" id="addAll">Add events</button></div>` : notes.length ? '' : '<p class="muted">No events found.</p>'}`;
   if (!total) return;

@@ -222,3 +222,6 @@ main { padding-bottom: calc(110px + env(safe-area-inset-bottom)); }
 html, body { overflow-x: hidden; }
 .ev, .next, .day, .week { box-sizing: border-box; max-width: 100%; }
 .ev .b { overflow: hidden; }
+
+.dup { color: #b45309; font-weight: 600; font-size: 13px; }
+@media (prefers-color-scheme: dark) { .dup { color: #fbbf24; } }
