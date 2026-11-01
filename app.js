@@ -32,6 +32,9 @@ const DEFAULT_CALENDARS = [
 // Calendars made before sharing existed: everything except "family" is shared.
 const isShared = (c) => c.shared ?? c.id !== 'family';
 const SHARED_FILE = 'data/shared.enc';
+// Google OAuth Client ID for Gmail scanning (not a secret; Settings can override it).
+const GOOGLE_CLIENT_ID = '854962669636-0i9dhtsofh30onsch64boiqmj804uhf3.apps.googleusercontent.com';
+const googleClientId = () => S.cal?.googleClientId || GOOGLE_CLIENT_ID;
 const FEEDS_SHARED_FILE = 'data/feeds-shared.enc';
 
 /* ---------- small helpers ---------- */
@@ -566,7 +569,7 @@ function openImport(files, tab = 'file') {
     $$('[data-tab]', sh).forEach((x) => x.classList.toggle('on', x.dataset.tab === t));
     $$('[data-pane]', sh).forEach((p) => p.classList.toggle('hidden', p.dataset.pane !== t));
     $('#review').innerHTML = '';
-    if (t === 'email' && S.cal.googleClientId) loadGIS().catch(() => {});
+    if (t === 'email' && googleClientId()) loadGIS().catch(() => {});
   };
   $$('[data-tab]', sh).forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
   showTab(tab);
@@ -683,7 +686,7 @@ function loadGIS() {
 }
 
 function emailPane() {
-  if (!S.cal.googleClientId) return `<p class="help" style="margin-top:14px">Email scanning needs a one-time Google setup. Open ⚙︎ Settings → <b>Email scanning</b>.</p>`;
+  if (!googleClientId()) return `<p class="help" style="margin-top:14px">Email scanning needs a one-time Google setup. Open ⚙︎ Settings → <b>Email scanning</b>.</p>`;
   const last = +store.get('lastScan') || 0;
   const since = last ? Math.min(60, Math.max(1, Math.ceil((Date.now() - last) / 864e5) + 1)) : 0;
   return `<p class="help" style="margin-top:14px">Looks through <b>your</b> Gmail for invites, schedules and events you haven’t reviewed yet. Nothing is added until you check it.</p>
@@ -700,7 +703,7 @@ function startEmailScan() {
   const g = window.google?.accounts?.oauth2;
   if (!g) { loadGIS().catch((e) => toast(e.message, 5000)); return toast('Loading Google sign-in — tap again in a second'); }
   const client = g.initTokenClient({
-    client_id: S.cal.googleClientId,
+    client_id: googleClientId(),
     scope: GMAIL_SCOPE,
     callback: (r) => (r.error ? toast(r.error_description || 'Google sign-in failed', 5000) : runEmailScan(r.access_token)),
     error_callback: (e) => toast(e.type === 'popup_closed' ? 'Sign-in was closed' : 'Google sign-in failed — check the Client ID setup', 5000),
@@ -941,7 +944,7 @@ function openSettings() {
     ${isEditor() ? `<h4>Email scanning (you two only)</h4>
     <p class="help">Lets each editor scan their own Gmail from their own phone. Needs a one-time Google setup — paste the <b>Client ID</b> here. Relatives never see this.</p>
     <label class="f">Google OAuth Client ID</label>
-    <input class="in" id="gcid" autocomplete="off" value="${esc(S.cal.googleClientId || '')}" placeholder="1234…apps.googleusercontent.com">
+    <input class="in" id="gcid" autocomplete="off" value="${esc(googleClientId())}" placeholder="1234…apps.googleusercontent.com">
     <div class="actions"><button class="btn" id="saveGcid">Save</button></div>` : ''}
 
     ${isEditor() ? `<h4>Extended family</h4>
