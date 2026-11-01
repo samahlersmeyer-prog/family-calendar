@@ -1,9 +1,9 @@
-import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=12';
-import { parseICS, hashId } from './lib/ics.js?v=12';
-import { parseScheduleText } from './lib/schedule-text.js?v=12';
-import { todayWall, addDays, addMinutes, dow, validDate, utcToWall } from './lib/tz.js?v=12';
-import { classifyMail, scoreRow, mergeRows, splitSentences, KEEP_SCORE, CHECK_SCORE } from './lib/mail-filter.js?v=12';
-import { initCloud } from './lib/cloud.js?v=12';
+import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=13';
+import { parseICS, hashId } from './lib/ics.js?v=13';
+import { parseScheduleText } from './lib/schedule-text.js?v=13';
+import { todayWall, addDays, addMinutes, dow, validDate, utcToWall } from './lib/tz.js?v=13';
+import { classifyMail, scoreRow, mergeRows, splitSentences, KEEP_SCORE, CHECK_SCORE, EVENT } from './lib/mail-filter.js?v=13';
+import { initCloud } from './lib/cloud.js?v=13';
 
 /* ---------- config ---------- */
 const CONFIG = { owner: 'samahlersmeyer-prog', repo: 'family-calendar', branch: 'main' };
@@ -498,6 +498,7 @@ function eventIcs(e) {
   return ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Family Calendar//EN', 'BEGIN:VEVENT', `UID:${e.id}@family-calendar`,
     `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)}Z`, `DTSTART${tz}:${fmt(e.start)}`, `DTEND${tz}:${fmt(end)}`,
     `SUMMARY:${escI(e.title)}`, e.location ? `LOCATION:${escI(e.location)}` : '', e.notes ? `DESCRIPTION:${escI(e.notes)}` : '',
+    ...(e.allDay ? [] : ['BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${escI(e.title)}`, 'TRIGGER:-PT30M', 'END:VALARM']),
     'END:VEVENT', 'END:VCALENDAR'].filter(Boolean).join('\r\n');
 }
 
@@ -636,6 +637,9 @@ function openEdit(e, day) {
   const sh = openModal(`
     <div class="head"><div><h2>${isNew ? 'New event' : 'Edit event'}</h2></div><button class="btn icon ghost" data-close aria-label="Close">✕</button></div>
     <form id="ef">
+      <label class="dropzone smart" id="smartZone"><input type="file" id="smartFile" accept=".ics,.ical,.pdf,image/*,text/calendar" hidden>
+        <b>📎 Drop or choose a flyer, PDF, screenshot or invite</b><br><span class="help">I’ll read it and fill in the details below</span></label>
+      <div id="smartStatus" class="help"></div>
       <label class="f">What</label><input class="in" name="title" value="${esc(e.title)}" required placeholder="e.g. Theo practice">
       <label class="f">Calendar</label><select class="in" name="cal">${calOptions(e.cal)}</select>
       <div class="two"><div><label class="f">Date</label><input class="in" type="date" name="date" value="${d}" required></div>
@@ -657,7 +661,11 @@ function openEdit(e, day) {
   const f = $('#ef');
   let keep = [...(e.attachments || [])];
   $$('[data-rm]', f).forEach((b) => (b.onclick = () => { keep = keep.filter((_, i) => i !== +b.dataset.rm); b.closest('.att').remove(); }));
-  f.files.onchange = () => { $('#newatts').textContent = [...f.files.files].map((x) => '📎 ' + x.name).join('  '); };
+  const pending = []; // files read by the drop zone get attached on save
+  const showNew = () => { $('#newatts').textContent = [...pending, ...f.files.files].map((x) => '📎 ' + x.name).join('  '); };
+  f.files.onchange = showNew;
+  $('#smartFile').onchange = (ev) => { if (ev.target.files[0]) smartFill(ev.target.files[0], f, pending, showNew); };
+  f._smart = (file) => smartFill(file, f, pending, showNew);
   f.allDay.onchange = () => { $('.timed', f).classList.toggle('hidden', f.allDay.checked); $('.alld', f).classList.toggle('hidden', !f.allDay.checked); };
   f.onsubmit = async (ev) => {
     ev.preventDefault();
@@ -679,7 +687,7 @@ function openEdit(e, day) {
     btn.disabled = true; btn.textContent = 'Saving…';
     try {
       const added = [];
-      for (const file of f.files.files) {
+      for (const file of [...pending, ...f.files.files]) {
         btn.textContent = `Uploading ${file.name}…`;
         added.push(await uploadAttachment(file));
       }
@@ -692,6 +700,86 @@ function openEdit(e, day) {
       closeModal(); toast('Saved');
     } catch (err) { btn.disabled = false; btn.textContent = 'Save'; toast(err.message, 5000); }
   };
+}
+
+/* ---------- read a dropped file into the Add form ---------- */
+let ocrReady;
+const loadOCR = () => (ocrReady ||= new Promise((res, rej) => {
+  const sc = document.createElement('script');
+  sc.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
+  sc.onload = () => res(window.Tesseract); sc.onerror = () => { ocrReady = null; rej(new Error('Couldn’t load the text reader')); };
+  document.head.appendChild(sc);
+}));
+async function ocr(source, status) {
+  const T = await loadOCR();
+  const r = await T.recognize(source, 'eng', { logger: (m) => { if (m.status === 'recognizing text') status(`Reading the picture… ${Math.round(m.progress * 100)}%`); } });
+  return r.data.text || '';
+}
+async function pdfPageImage(file) {
+  const pdfjs = await loadPdfJs();
+  const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
+  const page = await pdf.getPage(1);
+  const vp = page.getViewport({ scale: 2 });
+  const c = document.createElement('canvas'); c.width = vp.width; c.height = vp.height;
+  await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+  return c;
+}
+const ADDRESS = /\b\d{2,6}\s+(?:[NSEW]\.?\s+)?[A-Za-z0-9.' ]{2,40}?\s(?:St|Street|Ave|Avenue|Rd|Road|Blvd|Boulevard|Dr|Drive|Ln|Lane|Way|Ct|Court|Pkwy|Parkway|Hwy|Highway|Pl|Place|Cir|Circle|Trl|Trail)\b\.?(?:,?\s+[A-Za-z .]+)?(?:,?\s+(?:IN|Indiana))?(?:\s+\d{5})?/;
+
+async function smartFill(file, f, pending, showNew) {
+  const status = (t, bad) => { const el = $('#smartStatus'); if (el) { el.textContent = t; el.classList.toggle('bad', !!bad); } };
+  const name = file.name.toLowerCase();
+  try {
+    // A calendar invite: exact details
+    if (/\.(ics|ical)$/.test(name) || file.type === 'text/calendar') {
+      const evs = parseICS(await file.text(), { calId: 'tmp', source: 'ics', pastDays: 1 });
+      if (!evs.length) return status('No upcoming events in that invite.', true);
+      if (evs.length > 1) return offerSchedule(f, evs.length, () => openImport([file]));
+      const e = evs[0];
+      setForm(f, { title: e.title, date: e.start.slice(0, 10), time: e.allDay ? '' : e.start.slice(11, 16), endTime: e.allDay ? '' : (e.end || '').slice(11, 16), location: e.location, notes: e.notes, guess: e.title + ' ' + e.notes });
+      return status('✓ Filled in from the invite — check it and tap Save.');
+    }
+    let text = '';
+    if (name.endsWith('.pdf') || file.type === 'application/pdf') {
+      status('Reading the PDF…');
+      text = await pdfText(file);
+      if (text.replace(/\s/g, '').length < 20) { status('It’s a scanned PDF — reading the picture…'); text = await ocr(await pdfPageImage(file), status); }
+    } else if (/^image\//.test(file.type)) {
+      status('Reading the picture…');
+      text = await ocr(file, status);
+    } else return status('Drop a PDF, a picture or a calendar invite (.ics).', true);
+
+    const rows = mergeRows(parseScheduleText(splitSentences(text), { base: todayWall() })).filter((r) => r.date >= todayWall());
+    if (rows.length > 3) return offerSchedule(f, rows.length, () => { openImport(); renderReview({ textRows: rows, label: file.name, cal: guessCalText(text) || 'family' }); });
+    if (!rows.length) {
+      status('I couldn’t find a date in it — fill in the details and it’ll be attached.', true);
+    } else {
+      const best = rows.sort((a, b) => (!!b.time - !!a.time) || ((b.title || '').length - (a.title || '').length))[0];
+      const lines = text.split('\n').map((l) => l.trim()).filter((l) => l.length > 3 && l.length < 70 && !/^\d/.test(l) && !/\d{1,2}:\d{2}|\b\d{1,2}\s*[ap]m\b/i.test(l));
+      const firstLine = lines.find((l) => EVENT.test(l)) || lines[0] || '';
+      const words = (best.title || '').split(/\s+/).length;
+      const title = best.title && best.title.length >= 3 && words <= 8 ? best.title : firstLine;
+      setForm(f, { title, date: best.date, time: best.time || '', endTime: best.endTime || '', location: best.location || (text.match(ADDRESS) || [''])[0].trim(), notes: text.replace(/\s+/g, ' ').trim().slice(0, 500), guess: text });
+      status('✓ Filled in from ' + file.name + ' — check it and tap Save.');
+    }
+    pending.push(file); showNew();
+  } catch (err) { status(err.message, true); }
+}
+function setForm(f, v) {
+  if (v.title) f.title.value = v.title;
+  if (v.date) { f.date.value = v.date; if (f.last) f.last.value = v.date; }
+  const allDay = !v.time;
+  f.allDay.checked = allDay; f.allDay.onchange();
+  if (v.time) f.st.value = v.time;
+  f.et.value = v.endTime || '';
+  if (v.location) f.location.value = v.location;
+  if (v.notes && !f.notes.value) f.notes.value = v.notes;
+  if (v.guess) { const g = guessCalText(v.guess); if (g && [...f.cal.options].some((o) => o.value === g)) f.cal.value = g; }
+}
+function offerSchedule(f, n, go) {
+  const el = $('#smartStatus');
+  el.innerHTML = `This looks like a whole schedule (${n} events). <button type="button" class="btn primary" id="goSched">Review all ${n}</button>`;
+  $('#goSched').onclick = () => { closeModal(); go(); };
 }
 
 /* ---------- import (ICS / PDF / pasted text) ---------- */
@@ -1086,6 +1174,7 @@ addEventListener('drop', (e) => {
   if (!S.cal) return;
   if (!isEditor()) return toast('Add your GitHub token in Settings to import.', 4000);
   const files = [...e.dataTransfer.files];
+  if ($('#ef') && !$('#modal').classList.contains('hidden')) { $('#ef')._smart(files[0]); return; }
   if ($('#review') && !$('#modal').classList.contains('hidden')) handleFiles(files);
   else openImport(files);
 });
@@ -1147,7 +1236,14 @@ function openSettings() {
   $('[data-close]', sh).onclick = closeModal;
   $$('[data-size]', sh).forEach((b) => (b.onclick = () => { store.set('textSize', b.dataset.size || null); applyTextSize(); closeModal(); openSettings(); }));
   if ($('#signIn')) $('#signIn').onclick = () => { closeModal(); cloud.signIn().catch((e) => toast(e.message, 6000)); };
-  if ($('#signOut')) $('#signOut').onclick = async () => { closeModal(); await cloud.signOut(); toast('Signed out'); };
+  if ($('#signOut')) $('#signOut').onclick = async () => {
+    closeModal();
+    unsubs.forEach((u) => u()); unsubs = [];
+    store.set('space', null); S.space = null; S.cal = null;
+    history.replaceState(null, '', location.pathname);
+    await cloud.signOut();
+    toast('Signed out — this device no longer shows the calendar');
+  };
   if (!ed) return;
 
   const link = familyLink();

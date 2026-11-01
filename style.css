@@ -178,3 +178,7 @@ main { padding-bottom: calc(110px + env(safe-area-inset-bottom)); }
 .steps-card { background: var(--soft); border-radius: 12px; padding: 12px 14px; font-size: 15px; line-height: 1.45; margin: 6px 0 4px; }
 .qr { display: flex; justify-content: center; padding: 12px; background: #fff; border-radius: 12px; width: fit-content; margin: 8px auto; }
 .qr:empty { display: none; }
+
+.dropzone.smart { margin: 0 0 6px; padding: 16px; border-color: var(--accent); }
+#smartStatus { min-height: 18px; margin-bottom: 4px; }
+#smartStatus .btn { margin-top: 8px; }
