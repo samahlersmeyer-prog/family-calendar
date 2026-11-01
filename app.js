@@ -1,9 +1,9 @@
-import { encryptJSON, decryptJSON, saltOf, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=6';
-import { parseICS, hashId } from './lib/ics.js?v=6';
-import { parseScheduleText } from './lib/schedule-text.js?v=6';
-import { todayWall, addDays, addMinutes, dow, validDate, utcToWall } from './lib/tz.js?v=6';
-import { WORKFLOW_PATH, WORKFLOW_YML } from './lib/workflow.js?v=6';
-import { classifyMail, scoreRow, mergeRows, splitSentences, KEEP_SCORE, CHECK_SCORE } from './lib/mail-filter.js?v=6';
+import { encryptJSON, decryptJSON, saltOf, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=7';
+import { parseICS, hashId } from './lib/ics.js?v=7';
+import { parseScheduleText } from './lib/schedule-text.js?v=7';
+import { todayWall, addDays, addMinutes, dow, validDate, utcToWall } from './lib/tz.js?v=7';
+import { WORKFLOW_PATH, WORKFLOW_YML } from './lib/workflow.js?v=7';
+import { classifyMail, scoreRow, mergeRows, splitSentences, KEEP_SCORE, CHECK_SCORE } from './lib/mail-filter.js?v=7';
 
 /* ---------- config ---------- */
 const CONFIG = (() => {
@@ -301,14 +301,26 @@ const swatch = (c) => `background:${esc(c)};${isLight(c) ? 'box-shadow:inset 0 0
 function allEvents() {
   const seen = new Set();
   const out = [];
-  for (const e of [...S.cal.events, ...(S.feeds.events || []), ...(S.inbox.events || [])]) {
+  // A team-feed game that matches a game already on the same calendar that day is merged into it:
+  // the feed's time and place win (so changes flow in), the event keeps its title, notes and attachments.
+  const manual = new Map();
+  for (const e of S.cal.events) if (!e.allDay && !/practice|indoor/i.test(e.title)) manual.set(e.cal + '|' + e.start.slice(0, 10), e);
+  const merged = new Map();
+  const feeds = [];
+  for (const f of S.feeds.events || []) {
+    const m = !f.allDay && manual.get(f.cal + '|' + f.start.slice(0, 10));
+    if (m) merged.set(m.id, { ...m, start: f.start, end: f.end, location: f.location || m.location, feedId: f.id });
+    else feeds.push(f);
+  }
+  for (const e0 of [...S.cal.events, ...feeds, ...(S.inbox.events || [])]) {
+    const e = merged.get(e0.id) || e0;
     if (seen.has(e.id) || S.hidden.has(e.cal)) continue;
     seen.add(e.id);
     out.push(e);
   }
   return out;
 }
-const findEvent = (id) => S.cal.events.find((e) => e.id === id) || (S.feeds.events || []).find((e) => e.id === id) || (S.inbox.events || []).find((e) => e.id === id);
+const findEvent = (id) => allEvents().find((e) => e.id === id) || S.cal.events.find((e) => e.id === id) || (S.feeds.events || []).find((e) => e.id === id) || (S.inbox.events || []).find((e) => e.id === id);
 
 function indexByDay(from, to) {
   const idx = {};
