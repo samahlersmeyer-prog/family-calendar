@@ -1,8 +1,8 @@
-import { encryptJSON, decryptJSON, saltOf } from './lib/crypto.js';
-import { parseICS, hashId } from './lib/ics.js';
-import { parseScheduleText } from './lib/schedule-text.js';
-import { todayWall, addDays, addMinutes, dow, validDate } from './lib/tz.js';
-import { WORKFLOW_PATH, WORKFLOW_YML } from './lib/workflow.js';
+import { encryptJSON, decryptJSON, saltOf } from './lib/crypto.js?v=4';
+import { parseICS, hashId } from './lib/ics.js?v=4';
+import { parseScheduleText } from './lib/schedule-text.js?v=4';
+import { todayWall, addDays, addMinutes, dow, validDate } from './lib/tz.js?v=4';
+import { WORKFLOW_PATH, WORKFLOW_YML } from './lib/workflow.js?v=4';
 
 /* ---------- config ---------- */
 const CONFIG = (() => {
@@ -798,8 +798,13 @@ async function runEmailScan(token) {
     const found = [];
     for (let i = 0; i < ids.length; i++) {
       review.innerHTML = `<p class="muted">Reading email ${i + 1} of ${ids.length}…</p>`;
-      const mail = await extractMail(await gm(`/messages/${ids[i]}?format=full`, token), token);
-      if (mail.items.length) found.push(mail);
+      try {
+        const mail = await extractMail(await gm(`/messages/${ids[i]}?format=full`, token), token);
+        if (mail.items.length) found.push(mail);
+      } catch (e) {
+        if (/sign-in expired|said no/.test(e.message)) throw e; // real Gmail problems stop the scan
+        console.warn('Skipped an email:', e); // one odd email shouldn't stop the rest
+      }
     }
     store.set('lastScan', String(Date.now()));
     renderEmailReview(found, ids);
