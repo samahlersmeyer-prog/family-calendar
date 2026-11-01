@@ -217,3 +217,8 @@ main { padding-bottom: calc(110px + env(safe-area-inset-bottom)); }
   .week .ev .where { display: none; }
   .week .ev .b small { white-space: normal; }
 }
+
+/* never scroll sideways on a phone */
+html, body { overflow-x: hidden; }
+.ev, .next, .day, .week { box-sizing: border-box; max-width: 100%; }
+.ev .b { overflow: hidden; }

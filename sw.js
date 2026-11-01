@@ -1,7 +1,7 @@
 // Lets the calendar open with no signal. App files: network first, saved copy if offline.
 // Library files (versioned URLs): saved copy first. Firestore keeps its own offline copy.
-const CACHE = 'family-calendar-v14';
-const SHELL = ['./', 'index.html', 'style.css?v=14', 'app.js?v=14', 'manifest.webmanifest', 'icon.png', 'icon-192.png'];
+const CACHE = 'family-calendar-v15';
+const SHELL = ['./', 'index.html', 'style.css?v=15', 'app.js?v=15', 'manifest.webmanifest', 'icon.png', 'icon-192.png'];
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).catch(() => {}).then(() => self.skipWaiting()));
 });

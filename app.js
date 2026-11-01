@@ -1,9 +1,9 @@
-import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=14';
-import { parseICS, hashId } from './lib/ics.js?v=14';
-import { parseScheduleText } from './lib/schedule-text.js?v=14';
-import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=14';
-import { classifyMail, scoreRow, mergeRows, splitSentences, KEEP_SCORE, CHECK_SCORE, EVENT } from './lib/mail-filter.js?v=14';
-import { initCloud } from './lib/cloud.js?v=14';
+import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=15';
+import { parseICS, hashId } from './lib/ics.js?v=15';
+import { parseScheduleText } from './lib/schedule-text.js?v=15';
+import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=15';
+import { classifyMail, scoreRow, mergeRows, splitSentences, KEEP_SCORE, CHECK_SCORE, EVENT } from './lib/mail-filter.js?v=15';
+import { initCloud } from './lib/cloud.js?v=15';
 
 /* ---------- config ---------- */
 const CONFIG = { owner: 'samahlersmeyer-prog', repo: 'family-calendar', branch: 'main' };
@@ -406,6 +406,17 @@ function whoChip(c) {
   return `<span class="who"><i style="${swatch(c.color)}"></i>${esc(c.name)}</span>`;
 }
 
+/** "Holy Cross Lutheran School, 3425 Crescent Ave, Fort Wayne" → "Holy Cross" (the full address stays in the event). */
+function shortPlace(loc) {
+  let seg = String(loc || '').split(/\n|,| — | – | \(/)[0].trim();
+  if (!seg) return '';
+  if (/^\d/.test(seg)) return seg; // a street address: keep "4141 N Clinton St"
+  seg = seg.replace(/^Allen County War Memorial\s+/i, '')
+    .replace(/\s+(Evangelical\s+)?(Lutheran|Catholic|Christian|Community|Methodist|Baptist)?\s*(High School|Middle School|Elementary School|Elementary|Grade School|School|Church|Academy|Parish)$/i, '')
+    .trim();
+  return seg || loc;
+}
+
 function evRow(e, ov = {}) {
   const c = calById(e.cal);
   const ride = rideFor(e);
@@ -415,7 +426,7 @@ function evRow(e, ov = {}) {
     <span class="t">${t}${end ? `<small>to ${end}</small>` : ''}</span>
     <span class="b"><b>${e.maybe ? '<span class="tag">Maybe</span> ' : ''}${e.private && !S.relative ? '<span class="lock" title="Only you two">🔒</span> ' : ''}${esc(e.title)}${e.repeat ? ' <span class="rep" title="Repeats">🔁</span>' : ''}</b>
       ${whoChip(c)}
-      ${e.location ? `<a class="where" href="${mapsUrl(e.location)}" target="_blank" rel="noopener" data-stop>📍 ${esc(e.location)}</a>` : ''}
+      ${e.location ? `<a class="where" href="${mapsUrl(e.location)}" target="_blank" rel="noopener" data-stop title="${esc(e.location)}">📍 ${esc(shortPlace(e.location))}</a>` : ''}
       ${ride ? `<small class="ride">🚗 ${esc(ride.driver)} driving</small>` : ''}
       ${ov[e.id] ? `<small class="warn">⚠️ Same time as ${esc(ov[e.id])}</small>` : ''}
       ${e.addedBy ? `<small class="muted">Added by ${esc(e.addedBy)}</small>` : ''}</span></div>`;
