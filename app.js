@@ -1,9 +1,9 @@
-import { encryptJSON, decryptJSON, saltOf, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=8';
-import { parseICS, hashId } from './lib/ics.js?v=8';
-import { parseScheduleText } from './lib/schedule-text.js?v=8';
-import { todayWall, addDays, addMinutes, dow, validDate, utcToWall } from './lib/tz.js?v=8';
-import { WORKFLOW_PATH, WORKFLOW_YML } from './lib/workflow.js?v=8';
-import { classifyMail, scoreRow, mergeRows, splitSentences, KEEP_SCORE, CHECK_SCORE } from './lib/mail-filter.js?v=8';
+import { encryptJSON, decryptJSON, saltOf, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=9';
+import { parseICS, hashId } from './lib/ics.js?v=9';
+import { parseScheduleText } from './lib/schedule-text.js?v=9';
+import { todayWall, addDays, addMinutes, dow, validDate, utcToWall } from './lib/tz.js?v=9';
+import { WORKFLOW_PATH, WORKFLOW_YML } from './lib/workflow.js?v=9';
+import { classifyMail, scoreRow, mergeRows, splitSentences, KEEP_SCORE, CHECK_SCORE } from './lib/mail-filter.js?v=9';
 
 /* ---------- config ---------- */
 const CONFIG = (() => {
@@ -309,7 +309,13 @@ function allEvents() {
   const feeds = [];
   for (const f of S.feeds.events || []) {
     const m = !f.allDay && manual.get(f.cal + '|' + f.start.slice(0, 10));
-    if (m) merged.set(m.id, { ...m, start: f.start, end: f.end, location: f.location || m.location, feedId: f.id });
+    if (m) {
+      // Keep our full address unless the team app points somewhere else (compare street numbers + names)
+      const fl = (f.location || '').replace(/\s*\n\s*/g, ', ').trim();
+      const street = fl.split(',')[0].toLowerCase();
+      const location = !fl || (m.location || '').toLowerCase().includes(street) ? m.location : fl;
+      merged.set(m.id, { ...m, start: f.start, end: f.end, location, feedId: f.id });
+    }
     else feeds.push(f);
   }
   for (const e0 of [...S.cal.events, ...feeds, ...(S.inbox.events || [])]) {
