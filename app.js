@@ -1,9 +1,9 @@
-import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=17';
-import { parseICS, hashId } from './lib/ics.js?v=17';
-import { parseScheduleText } from './lib/schedule-text.js?v=17';
-import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=17';
-import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT } from './lib/mail-filter.js?v=17';
-import { initCloud } from './lib/cloud.js?v=17';
+import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=18';
+import { parseICS, hashId } from './lib/ics.js?v=18';
+import { parseScheduleText } from './lib/schedule-text.js?v=18';
+import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=18';
+import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT } from './lib/mail-filter.js?v=18';
+import { initCloud } from './lib/cloud.js?v=18';
 
 /* ---------- config ---------- */
 const CONFIG = { owner: 'samahlersmeyer-prog', repo: 'family-calendar', branch: 'main' };
@@ -1324,7 +1324,10 @@ async function extractMail(m, token) {
       if (keys.has(k)) continue;
       keys.add(k);
       const words = (r.title || '').split(/\s+/).length;
-      const title = r.title && r.title.length >= 3 && words <= 12 ? r.title : cleanSubject;
+      const ownTitle = r.title && r.title.length >= 3 && words <= 12;
+      // "dropping money to Ryan today" — a 'today/tomorrow' with no time, or a date with nothing to call it, isn't an event
+      if (!r.time && (r.rel || !ownTitle)) continue;
+      const title = ownTitle ? r.title : cleanSubject;
       items.push({ kind: 'txt', score, row: { ...r, title } });
       if (items.length >= 8) break;
     }
