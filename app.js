@@ -1,9 +1,9 @@
-import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=18';
-import { parseICS, hashId } from './lib/ics.js?v=18';
-import { parseScheduleText } from './lib/schedule-text.js?v=18';
-import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=18';
-import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT } from './lib/mail-filter.js?v=18';
-import { initCloud } from './lib/cloud.js?v=18';
+import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=19';
+import { parseICS, hashId } from './lib/ics.js?v=19';
+import { parseScheduleText } from './lib/schedule-text.js?v=19';
+import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=19';
+import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT } from './lib/mail-filter.js?v=19';
+import { initCloud } from './lib/cloud.js?v=19';
 
 /* ---------- config ---------- */
 const CONFIG = { owner: 'samahlersmeyer-prog', repo: 'family-calendar', branch: 'main' };
@@ -79,6 +79,7 @@ const readRaw = async (path) => {
   return r.ok ? r.text() : null;
 };
 const withShared = (e, cals) => {
+  if (e.pending) return { ...e, shared: false }; // waiting for Sam or Emily to approve: hidden from everyone else
   if (e.cal === 'friends') return { ...e, shared: true };
   const c = cals.find((x) => x.id === e.cal);
   return { ...e, shared: !!(c ? isShared(c) : false) && !e.private };
@@ -310,7 +311,7 @@ const myName = () => store.get('myName') || (S.user?.name || '').split(' ')[0] |
 
 /* two kids in two places at once */
 function overlapMap(evs) {
-  const out = {};
+  const out = { __dups: dupMap(evs) };
   const timed = evs.filter((e) => !e.allDay && !e.maybe);
   for (let i = 0; i < timed.length; i++) for (let j = i + 1; j < timed.length; j++) {
     const a = timed[i], b = timed[j];
@@ -318,6 +319,7 @@ function overlapMap(evs) {
     if (!(a.start < be && b.start < ae)) continue;
     const ka = eventKid(a), kb = eventKid(b);
     if (!ka || !kb || ka === kb) continue;
+    if (out.__dups[a.id] || out.__dups[b.id]) continue;
     out[a.id] ||= b.title; out[b.id] ||= a.title;
   }
   return out;
@@ -325,18 +327,38 @@ function overlapMap(evs) {
 
 /* duplicate guard: same day, about the same time, sharing a real word in the title */
 const STOP = new Set(['the', 'and', 'game', 'games', 'lutheran', 'school', 'church', 'with', 'for', 'max', 'theo', 'junie', 'louie', 'josie', 'holy', 'cross', 'crusaders', 'mad', 'apples', '14u', 'maybe', 'they', 'win', 'lose', 'day']);
-const words = (t) => String(t || '').toLowerCase().replace(/\(.*?\)|\bvs\.?|@|–|-/g, ' ').replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter((w) => w.length > 2 && !STOP.has(w));
+const PLACE_STOP = new Set(['street', 'ave', 'avenue', 'road', 'blvd', 'drive', 'fort', 'wayne', 'indianapolis', 'gym', 'north', 'south', 'east', 'west']);
+const stem = (w) => w.replace(/(ings?|ed|es|s)$/, '');
+const words = (t) => String(t || '').toLowerCase().replace(/\(.*?\)|\bvs\.?|@|–|-/g, ' ').replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter((w) => w.length > 2 && !STOP.has(w) && !/^\d+$/.test(w)).map(stem);
+// what an event is about: its title plus the name of the place (not the street address)
+const about = (e) => new Set([...words(e.title), ...words(String(e.location || '').split(',')[0]).filter((w) => !PLACE_STOP.has(w))]);
 function findDuplicate(c, ignoreId) {
   const d = c.start.slice(0, 10);
-  const cw = new Set(words(c.title));
+  const cw = about(c);
   const saveKid = S.kid; S.kid = ''; // look across everyone, even when a kid filter is on
   const pool = allEvents(); S.kid = saveKid;
   return pool.find((e) => {
     if ((ignoreId && (e.id === ignoreId || e.seriesId === ignoreId)) || e.start.slice(0, 10) !== d) return false;
     if (e.title.trim().toLowerCase() === c.title.trim().toLowerCase()) return true;
     const near = c.allDay || e.allDay ? c.allDay === e.allDay : Math.abs(diffMinutes(e.start, c.start)) <= 45;
-    return near && words(e.title).some((w) => cw.has(w));
+    return near && [...about(e)].some((w) => cw.has(w));
   });
+}
+
+/* the same thing entered twice (by hand and from email, say): flag the newer copy so an editor can delete it */
+function dupMap(evs) {
+  const out = {};
+  if (!isEditor()) return out;
+  const mine = evs.filter((e) => !e.allDay && e.source !== 'feed' && !e.seriesId);
+  for (let i = 0; i < mine.length; i++) for (let j = i + 1; j < mine.length; j++) {
+    const a = mine[i], b = mine[j];
+    if (Math.abs(diffMinutes(a.start, b.start)) > 45) continue;
+    const wa = about(a);
+    if (a.title.trim().toLowerCase() !== b.title.trim().toLowerCase() && ![...about(b)].some((w) => wa.has(w))) continue;
+    const newer = (b.source === 'email' && a.source !== 'email') || (b.createdAt || 0) > (a.createdAt || 0) ? b : a;
+    out[newer.id] = newer === a ? b : a;
+  }
+  return out;
 }
 
 function allEvents() {
@@ -359,7 +381,9 @@ function allEvents() {
     }
     else feeds.push(f);
   }
-  for (const e0 of [...S.cal.events.flatMap(occurrences), ...feeds, ...(S.inbox.events || [])]) {
+  const live = new Set(S.cal.events.map((e) => e.id));
+  const myWaiting = isEditor() ? [] : JSON.parse(store.get('myPending') || '[]').filter((e) => !live.has(e.id) && (e.end || e.start) >= todayWall());
+  for (const e0 of [...S.cal.events.filter((e) => !e.pending).flatMap(occurrences), ...myWaiting, ...feeds, ...(S.inbox.events || [])]) {
     const e = merged.get(e0.id) || e0;
     if (seen.has(e.id) || S.hidden.has(e.cal)) continue;
     if (S.kid && !forKid(e, S.kid)) continue;
@@ -440,11 +464,11 @@ function evRow(e, ov = {}) {
   const end = !e.allDay && e.end && e.end.slice(0, 10) === e.start.slice(0, 10) ? fmtTime(e.end) : '';
   return `<div class="ev ${e.maybe ? 'maybe' : ''}" role="button" tabindex="0" data-ev="${esc(e.id)}"><span class="bar" style="${swatch(c.color)}"></span>
     <span class="t">${t}${end ? `<small>to ${end}</small>` : ''}</span>
-    <span class="b"><b>${e.maybe ? '<span class="tag">Maybe</span> ' : ''}${e.private && !S.relative ? '<span class="lock" title="Only you two">🔒</span> ' : ''}${esc(e.title)}${e.repeat ? ' <span class="rep" title="Repeats">🔁</span>' : ''}</b>
+    <span class="b"><b>${e.pending ? '<span class="tag">Waiting for OK</span> ' : ''}${e.maybe ? '<span class="tag">Maybe</span> ' : ''}${e.private && !S.relative ? '<span class="lock" title="Only you two">🔒</span> ' : ''}${esc(e.title)}${e.repeat ? ' <span class="rep" title="Repeats">🔁</span>' : ''}</b>
       ${whoChip(c)}
       ${e.location ? `<a class="where" href="${mapsUrl(e.location)}" target="_blank" rel="noopener" data-stop title="${esc(e.location)}">📍 ${esc(shortPlace(e.location))}</a>` : ''}
       ${ride ? `<small class="ride">🚗 ${esc(ride.driver)} driving</small>` : ''}
-      ${ov[e.id] ? `<small class="warn">⚠️ Same time as ${esc(ov[e.id])}</small>` : ''}
+      ${ov.__dups?.[e.id] ? `<small class="warn">♊ Looks like a duplicate of “${esc(ov.__dups[e.id].title)}”</small>` : ov[e.id] ? `<small class="warn">⚠️ Same time as ${esc(ov[e.id])}</small>` : ''}
       ${e.addedBy ? `<small class="muted">Added by ${esc(e.addedBy)}</small>` : ''}</span></div>`;
 }
 
@@ -465,6 +489,7 @@ function renderMain() {
     </div>
   </header>
   ${welcomeBanner()}
+  ${(() => { const n = isEditor() ? S.cal.events.filter((e) => e.pending).length : 0; return n ? `<button class="welcome approve" id="approvals"><div><b>📬 ${n} event${n === 1 ? '' : 's'} from family to OK</b><br><span class="help">Tap to approve or decline</span></div></button>` : ''; })()}
   <nav class="kids" aria-label="Whose schedule">${['', ...kidsList()].map((k) => `<button class="kid ${S.kid === k ? 'on' : ''}" data-kid="${esc(k)}">${k ? esc(k) : 'Everyone'}</button>`).join('')}</nav>
   <nav class="chips" aria-label="Show or hide calendars">${visibleCalendars().map((c) => `<button class="chip ${S.hidden.has(c.id) ? 'off' : ''}" data-cal="${esc(c.id)}"><i style="${swatch(c.color)}"></i>${esc(c.name)}</button>`).join('')}</nav>
   <main id="view"></main>
@@ -475,6 +500,7 @@ function renderMain() {
     <button data-tab="settings"><span>⚙️</span>Settings</button>
   </nav>`;
   $$('[data-view]').forEach((b) => (b.onclick = () => { S.view = b.dataset.view; store.set('view', S.view); renderMain(); }));
+  if ($('#approvals')) $('#approvals').onclick = openApprovals;
   $('#searchBtn').onclick = () => { S.q = S.q === undefined ? '' : undefined; renderMain(); if (S.q !== undefined) $('#q').focus(); };
   if ($('#q')) {
     $('#q').oninput = () => { S.q = $('#q').value; renderSearch(); };
@@ -694,6 +720,8 @@ function openDetail(id) {
       ${e.addedBy ? `<div class="help">Added by ${esc(e.addedBy)}</div>` : ''}
       ${e.private && !S.relative ? `<div class="help">🔒 Only you two — extended family doesn’t see this</div>` : ''}
       ${fromFeed ? `<div class="help">Synced from the team’s calendar — changes come from the team app.</div>` : ''}
+      ${(() => { const d = isEditor() && dupMap((indexByDay(e.start.slice(0, 10), e.start.slice(0, 10))[e.start.slice(0, 10)] || []))[e.id]; return d ? `<div class="help bad">♊ Looks like the same thing as “${esc(d.title)}” (${esc(timeRange(d))}). If so, delete this one.</div>` : ''; })()}
+      ${e.pending ? `<div class="help">⏳ Waiting for Sam or Emily to OK it — only you can see it for now.</div>` : ''}
       ${e.maybe ? `<div class="help">❔ <b>Maybe</b> — depends on results. ${isEditor() ? 'Delete it if it doesn’t happen.' : ''}</div>` : ''}
       ${e.repeat ? `<div class="help">🔁 ${esc(repeatLabel(e.repeat))}</div>` : ''}
       ${!e.allDay ? `<div class="ridebox" id="ridebox"><span class="k">Who’s driving?</span>
@@ -782,6 +810,29 @@ async function openAttachment(a) {
   } catch (err) { if (win) win.close(); toast(err.message, 5000); }
 }
 
+/* ---------- approve what relatives add ---------- */
+function openApprovals() {
+  const list = S.cal.events.filter((e) => e.pending).sort((a, b) => a.start.localeCompare(b.start));
+  const sh = openModal(`
+    <div class="head"><div><h2>From family</h2><p class="help">Nobody else sees these until you OK them.</p></div><button class="btn icon ghost" data-close aria-label="Close">✕</button></div>
+    ${list.length ? list.map((e) => `<div class="mail" data-id="${esc(e.id)}"><div class="mailhead"><b>${esc(e.title)}</b><small>Added by ${esc(e.addedBy || 'someone')}</small></div>
+      <div class="help">${esc(dateLine(e.start.slice(0, 10)))} · ${esc(timeRange(e))}${e.location ? ' · ' + esc(e.location) : ''}</div>
+      ${e.notes ? `<div class="help">${esc(e.notes)}</div>` : ''}
+      <div class="actions"><button class="btn primary" data-ok>✓ Add to calendar</button><button class="btn danger" data-no>Decline</button></div></div>`).join('') : '<p class="muted">All caught up.</p>'}`);
+  $('[data-close]', sh).onclick = closeModal;
+  $$('.mail', sh).forEach((box) => {
+    const id = box.dataset.id;
+    $('[data-ok]', box).onclick = async () => {
+      try { await saveCal((d) => { const ev = d.events.find((x) => x.id === id); if (ev) delete ev.pending; }); box.remove(); toast('Added for everyone'); if (!$$('.mail', sh).length) { closeModal(); } }
+      catch (err) { toast(err.message, 5000); }
+    };
+    $('[data-no]', box).onclick = async () => {
+      try { await saveCal((d) => { d.events = d.events.filter((x) => x.id !== id); }); box.remove(); toast('Declined'); if (!$$('.mail', sh).length) { closeModal(); } }
+      catch (err) { toast(err.message, 5000); }
+    };
+  });
+}
+
 /* ---------- relatives add events (Family & Friends) ---------- */
 const familyAddOn = () => !!S.space;
 const canFamilyAdd = () => !isEditor() && !!S.space;
@@ -796,7 +847,7 @@ async function saveInbox(mutate) {
 function openFamilyAdd(day) {
   const name = store.get('myName') || '';
   const sh = openModal(`
-    <div class="head"><div><h2>Add a family event</h2><p class="help">Everyone in the family will see it — birthdays, dinners, visits, anything.</p></div>
+    <div class="head"><div><h2>Add a family event</h2><p class="help">Birthdays, dinners, visits, anything. Sam or Emily will give it a quick OK, then everyone sees it.</p></div>
       <button class="btn icon ghost" data-close aria-label="Close">✕</button></div>
     <form id="ff">
       <label class="f">What’s happening?</label><input class="in" name="title" required placeholder="e.g. Grandma’s birthday dinner">
@@ -819,9 +870,10 @@ function openFamilyAdd(day) {
     const btn = $('button.primary', f);
     btn.disabled = true; btn.textContent = 'Adding…';
     try {
-      await cloud.addFamilyEvent(S.space, { ...e, cal: 'friends', shared: true, createdAt: Date.now() });
+      await cloud.addFamilyEvent(S.space, { ...e, cal: 'friends', shared: false, pending: true, createdAt: Date.now() });
+      store.set('myPending', JSON.stringify([...JSON.parse(store.get('myPending') || '[]'), { ...e, cal: 'friends', pending: true }].slice(-50)));
       store.set('myAdds', JSON.stringify([...JSON.parse(store.get('myAdds') || '[]'), e.id].slice(-300)));
-      closeModal(); toast('Added — thanks!');
+      closeModal(); toast('Sent! It’ll show for everyone once Sam or Emily OKs it.', 5000); renderMain();
     } catch (err) { btn.disabled = false; btn.textContent = 'Add to calendar'; toast(err.message, 5000); }
   };
 }
@@ -886,7 +938,7 @@ function openEdit(e, day) {
       end = f.et.value ? `${date}T${f.et.value}` : addMinutes(start, 60);
       if (end <= start) end = addDays(end, 1);
     }
-    const out = { ...e, id: e.id || newId(), cal: f.cal.value, title: f.title.value.trim(), allDay, start, end, location: f.location.value.trim(), notes: f.notes.value.trim(), source: e.source || 'manual' };
+    const out = { ...e, createdAt: e.createdAt || Date.now(), id: e.id || newId(), cal: f.cal.value, title: f.title.value.trim(), allDay, start, end, location: f.location.value.trim(), notes: f.notes.value.trim(), source: e.source || 'manual' };
     if (f.priv.checked) out.private = true; else delete out.private;
     if (f.maybe.checked) out.maybe = true; else delete out.maybe;
     if (f.rep.value) out.repeat = { every: f.rep.value, ...(f.until.value ? { until: f.until.value } : {}), skip: (e.repeat?.skip || []).filter((d) => d >= date) };
@@ -1192,7 +1244,7 @@ function renderReview({ icsEvents = [], textRows = [], notes = [], label, cal })
         let end = !time ? addDays(date, 1) : r.endTime && r.time === time ? `${date}T${r.endTime}` : addMinutes(start, 90);
         if (end <= start) end = addMinutes(start, 90);
         const location = $('[data-f=location]', row).value.trim();
-        out.push({ id: hashId(calId + '|' + start + '|' + title), cal: calId, title, start, end, allDay: !time, location, notes: '', source: 'import', ...(MAYBE_RE.test(title) ? { maybe: true } : {}) });
+        out.push({ id: hashId(calId + '|' + start + '|' + title), cal: calId, title, start, end, allDay: !time, location, notes: '', source: 'import', createdAt: Date.now(), ...(MAYBE_RE.test(title) ? { maybe: true } : {}) });
       }
     }
     btn.disabled = true; btn.textContent = 'Saving…';
@@ -1369,7 +1421,7 @@ async function runEmailScan(token) {
     const no = new Set(JSON.parse(store.get('dismissedMail') || '[]'));
     for (const f of found) {
       f.items = f.items.filter((it) => {
-        const r = it.kind === 'ics' ? { title: it.ev.title, start: it.ev.start, allDay: it.ev.allDay } : { title: it.row.title, start: it.row.time ? `${it.row.date}T${it.row.time}` : it.row.date, allDay: !it.row.time };
+        const r = it.kind === 'ics' ? { title: it.ev.title, start: it.ev.start, allDay: it.ev.allDay, location: it.ev.location } : { title: it.row.title, start: it.row.time ? `${it.row.date}T${it.row.time}` : it.row.date, allDay: !it.row.time, location: it.row.location };
         it.key = `${f.id}|${r.start}`;
         return !no.has(it.key) && !findDuplicate(r);
       });
@@ -1439,7 +1491,7 @@ function renderEmailReview(found, ids) {
       } else end = !time ? addDays(date, 1) : it.row.endTime && it.row.time === time ? `${date}T${it.row.endTime}` : addMinutes(start, 60);
       if (end <= start) end = addMinutes(start, 60);
       out.push({ id: hashId(calId + '|' + start + '|' + title), cal: calId, title, start, end, allDay: !time, location: v('location'),
-        notes: it.kind === 'ics' ? it.ev.notes : `${it.row.notes ? it.row.notes + '\n' : ''}From email: ${found[+row.dataset.m].subject} (${found[+row.dataset.m].from})`, source: 'email' });
+        notes: it.kind === 'ics' ? it.ev.notes : `${it.row.notes ? it.row.notes + '\n' : ''}From email: ${found[+row.dataset.m].subject} (${found[+row.dataset.m].from})`, source: 'email', createdAt: Date.now() });
     }
     btn.disabled = true; btn.textContent = 'Saving…';
     try {

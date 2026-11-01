@@ -37,13 +37,15 @@ service cloud.firestore {
       match /events/{eventId} {
         allow get, list: if resource.data.shared == true || isEditor(space);
         allow create: if isEditor(space) || (
+          // relatives' events wait for Sam or Emily to approve (hidden from everyone until then)
           request.resource.data.cal == 'friends'
-          && request.resource.data.shared == true
+          && request.resource.data.shared == false
+          && request.resource.data.pending == true
           && request.resource.data.addedBy is string
           && request.resource.data.addedBy.size() < 80
           && request.resource.data.title is string
           && request.resource.data.title.size() < 200
-          && request.resource.data.keys().hasOnly(['id', 'cal', 'title', 'start', 'end', 'allDay', 'location', 'notes', 'addedBy', 'source', 'shared', 'createdAt'])
+          && request.resource.data.keys().hasOnly(['id', 'cal', 'title', 'start', 'end', 'allDay', 'location', 'notes', 'addedBy', 'source', 'shared', 'pending', 'createdAt'])
         );
         allow update, delete: if isEditor(space);
       }
