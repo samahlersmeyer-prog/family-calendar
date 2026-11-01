@@ -122,3 +122,42 @@ code { background: var(--soft); padding: 1px 5px; border-radius: 5px; font-size:
 .mailhead b { display: block; font-size: 15px; }
 .mailhead small { color: var(--muted); font-size: 13px; }
 .seg + [data-pane] { margin-top: 4px; }
+
+/* ---- friendlier views ---- */
+html.big { zoom: 1.15; }
+html.huge { zoom: 1.32; }
+.welcome { display: flex; gap: 10px; align-items: flex-start; margin: 12px 16px 0; padding: 14px 16px; background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: var(--radius); font-size: 15px; line-height: 1.45; }
+.welcome > div { flex: 1; }
+.weekhead { margin: 28px 0 -6px; font-size: 22px; font-weight: 800; letter-spacing: -.01em; }
+.day h3 { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; text-transform: none; letter-spacing: 0; font-size: 14px; }
+.day h3 .rel { font-size: 18px; font-weight: 800; color: var(--ink); }
+.day h3 span:not(.rel) { color: var(--muted); font-weight: 600; }
+.ev { cursor: pointer; padding: 12px 14px; }
+.ev .t { width: 74px; font-size: 15px; }
+.ev .t small { font-size: 12px; }
+.ev .b b { font-size: 16px; }
+.ev .b .who { margin-top: 4px; }
+.ev .where { display: inline-block; margin-top: 5px; font-size: 14px; color: var(--ink); text-decoration: none; border-bottom: 1px dotted var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: top; }
+.ev .b > small { white-space: normal; }
+.who { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.who i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
+.lock { font-size: 13px; }
+.next { margin: 16px 0 6px; padding: 18px; border-radius: 18px; background: var(--card); border: 1px solid var(--line); border-top: 6px solid var(--c); box-shadow: var(--shadow); cursor: pointer; }
+.next .nlabel { font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: var(--accent); }
+.next .ntitle { font-size: 22px; font-weight: 800; margin: 6px 0 4px; line-height: 1.2; }
+.next .nwhen { font-size: 16px; font-weight: 600; margin-bottom: 6px; }
+.next .nnote { margin-top: 8px; font-size: 14px; background: var(--soft); padding: 8px 10px; border-radius: 10px; }
+.next .nwhere { margin-top: 8px; font-size: 14px; color: var(--muted); }
+.next .actions { margin-top: 12px; }
+.meta.big { font-size: 16px; gap: 14px; }
+.meta .k { display: block; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 2px; }
+.actions.stack { flex-direction: column; }
+.actions.stack .btn { width: 100%; padding: 13px; font-size: 16px; text-align: center; text-decoration: none; }
+a.btn { text-decoration: none; display: inline-block; }
+.btn.big { padding: 13px 22px; font-size: 16px; width: 100%; }
+.fab { width: auto; min-width: 64px; height: 56px; padding: 0 20px 0 16px; border-radius: 999px; display: flex; align-items: center; gap: 6px; font-size: 28px; }
+.fab span { font-size: 16px; font-weight: 700; }
+.att { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; font-size: 15px; }
+.dropzone.small { padding: 12px; margin-top: 6px; }
+.pill.lightc { border-left-color: var(--muted); background: color-mix(in srgb, var(--muted) 15%, transparent); }
+.steps.help { font-size: 14px; }

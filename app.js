@@ -1,8 +1,9 @@
-import { encryptJSON, decryptJSON, saltOf } from './lib/crypto.js?v=5';
-import { parseICS, hashId } from './lib/ics.js?v=5';
-import { parseScheduleText } from './lib/schedule-text.js?v=5';
-import { todayWall, addDays, addMinutes, dow, validDate } from './lib/tz.js?v=5';
-import { WORKFLOW_PATH, WORKFLOW_YML } from './lib/workflow.js?v=5';
+import { encryptJSON, decryptJSON, saltOf, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=6';
+import { parseICS, hashId } from './lib/ics.js?v=6';
+import { parseScheduleText } from './lib/schedule-text.js?v=6';
+import { todayWall, addDays, addMinutes, dow, validDate, utcToWall } from './lib/tz.js?v=6';
+import { WORKFLOW_PATH, WORKFLOW_YML } from './lib/workflow.js?v=6';
+import { classifyMail, scoreRow, mergeRows, splitSentences, KEEP_SCORE, CHECK_SCORE } from './lib/mail-filter.js?v=6';
 
 /* ---------- config ---------- */
 const CONFIG = (() => {
@@ -80,6 +81,7 @@ const S = {
   cal: null,
   calSalt: null,
   feeds: { events: [], status: {} },
+  inbox: { events: [] },
   hidden: new Set(JSON.parse(store.get('hidden') || '[]')),
   view: store.get('view') || (innerWidth < 760 ? 'list' : 'month'),
   month: todayWall().slice(0, 7),
@@ -201,6 +203,7 @@ async function unlock(pass, remember) {
   S.pass = pass;
   if (remember) store.set('pass', pass);
   await loadFeeds();
+  await loadInbox();
   if (isEditor()) migrate();
   S.loadedAt = Date.now();
   renderMain();
@@ -283,19 +286,29 @@ function renderSetupDone(wfOk) {
 }
 
 /* ---------- events ---------- */
-const calById = (id) => S.cal.calendars.find((c) => c.id === id) || { id, name: 'Other', color: '#94a3b8' };
+const FRIENDS = { id: 'friends', name: 'Family & Friends', color: '#0891b2', shared: true };
+const calById = (id) => S.cal.calendars.find((c) => c.id === id) || (id === 'friends' ? FRIENDS : { id, name: 'Other', color: '#94a3b8' });
+const visibleCalendars = () => [...S.cal.calendars, ...(familyAddOn() ? [FRIENDS] : [])];
+
+function isLight(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
+  if (!m) return false;
+  const n = parseInt(m[1], 16), r = n >> 16, g = (n >> 8) & 255, b = n & 255;
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.82;
+}
+const swatch = (c) => `background:${esc(c)};${isLight(c) ? 'box-shadow:inset 0 0 0 1.5px var(--muted);' : ''}`;
 
 function allEvents() {
   const seen = new Set();
   const out = [];
-  for (const e of [...S.cal.events, ...(S.feeds.events || [])]) {
+  for (const e of [...S.cal.events, ...(S.feeds.events || []), ...(S.inbox.events || [])]) {
     if (seen.has(e.id) || S.hidden.has(e.cal)) continue;
     seen.add(e.id);
     out.push(e);
   }
   return out;
 }
-const findEvent = (id) => S.cal.events.find((e) => e.id === id) || (S.feeds.events || []).find((e) => e.id === id);
+const findEvent = (id) => S.cal.events.find((e) => e.id === id) || (S.feeds.events || []).find((e) => e.id === id) || (S.inbox.events || []).find((e) => e.id === id);
 
 function indexByDay(from, to) {
   const idx = {};
@@ -312,18 +325,58 @@ function indexByDay(from, to) {
   return idx;
 }
 
+/* plain-English labels */
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+function dayLabel(d) {
+  const t = todayWall();
+  if (d === t) return 'Today';
+  if (d === addDays(t, 1)) return 'Tomorrow';
+  if (d > t && d <= addDays(t, 6)) return WEEKDAYS[dow(d)];
+  return fmtDay(d);
+}
+function dateLine(d) {
+  const [y, m, dd] = d.split('-').map(Number);
+  return `${WEEKDAYS[dow(d)]}, ${MONTHS[m - 1]} ${dd}${y !== +todayWall().slice(0, 4) ? ', ' + y : ''}`;
+}
+function timeRange(e) {
+  if (e.allDay) {
+    const last = e.end ? addDays(e.end.slice(0, 10), -1) : e.start;
+    return last > e.start.slice(0, 10) ? `All day · through ${fmtDay(last)}` : 'All day';
+  }
+  const s = fmtTime(e.start), en = e.end && e.end.slice(0, 10) === e.start.slice(0, 10) ? fmtTime(e.end) : '';
+  if (!en) return s;
+  return s.slice(-2) === en.slice(-2) ? `${s.slice(0, -3)} – ${en}` : `${s} – ${en}`;
+}
+const isApple = /iPhone|iPad|Macintosh/.test(navigator.userAgent);
+const mapsUrl = (loc) => isApple ? `https://maps.apple.com/?q=${encodeURIComponent(loc)}` : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(loc)}`;
+
+function nextUp() {
+  const now = utcToWall(new Date()), today = now.slice(0, 10);
+  return allEvents()
+    .filter((e) => e.allDay ? (e.end || addDays(e.start, 1)).slice(0, 10) > today && e.start.slice(0, 10) >= today : (e.end || e.start) > now)
+    .filter((e) => !/no school|no indoor|break\b/i.test(e.title))
+    .sort((a, b) => a.start.localeCompare(b.start))[0];
+}
+
+function whoChip(c) {
+  return `<span class="who"><i style="${swatch(c.color)}"></i>${esc(c.name)}</span>`;
+}
+
 function evRow(e) {
   const c = calById(e.cal);
   const t = e.allDay ? 'All day' : fmtTime(e.start);
   const end = !e.allDay && e.end && e.end.slice(0, 10) === e.start.slice(0, 10) ? fmtTime(e.end) : '';
-  const sub = [e.location, c.name].filter(Boolean).join(' · ');
-  return `<button class="ev" data-ev="${esc(e.id)}"><span class="bar" style="background:${esc(c.color)}"></span>
-    <span class="t">${t}${end ? `<small>${end}</small>` : ''}</span>
-    <span class="b"><b>${e.private && !S.relative ? '🔒 ' : ''}${esc(e.title)}</b><small>${esc(sub)}</small></span></button>`;
+  return `<div class="ev" role="button" tabindex="0" data-ev="${esc(e.id)}"><span class="bar" style="${swatch(c.color)}"></span>
+    <span class="t">${t}${end ? `<small>to ${end}</small>` : ''}</span>
+    <span class="b"><b>${e.private && !S.relative ? '<span class="lock" title="Only you two">🔒</span> ' : ''}${esc(e.title)}</b>
+      ${whoChip(c)}
+      ${e.location ? `<a class="where" href="${mapsUrl(e.location)}" target="_blank" rel="noopener" data-stop>📍 ${esc(e.location)}</a>` : ''}
+      ${e.addedBy ? `<small class="muted">Added by ${esc(e.addedBy)}</small>` : ''}</span></div>`;
 }
 
 /* ---------- main screen ---------- */
 function renderMain() {
+  const canAdd = isEditor() || canFamilyAdd();
   app.innerHTML = `
   <header class="top">
     <div class="row1">
@@ -331,14 +384,15 @@ function renderMain() {
       <button class="btn icon" id="btnSettings" aria-label="Settings">⚙︎</button>
     </div>
     <div class="row2">
-      <div class="seg"><button data-view="list" class="${S.view === 'list' ? 'on' : ''}">List</button><button data-view="month" class="${S.view === 'month' ? 'on' : ''}">Month</button></div>
+      <div class="seg"><button data-view="list" class="${S.view === 'list' ? 'on' : ''}">Upcoming</button><button data-view="month" class="${S.view === 'month' ? 'on' : ''}">Month</button></div>
       <span class="spacer"></span>
       ${isEditor() ? `<button class="btn" id="btnEmail">✉︎ Email</button><button class="btn" id="btnImport">Import</button>` : ''}
     </div>
   </header>
-  <nav class="chips">${S.cal.calendars.map((c) => `<button class="chip ${S.hidden.has(c.id) ? 'off' : ''}" data-cal="${esc(c.id)}"><i style="background:${esc(c.color)}"></i>${esc(c.name)}</button>`).join('')}</nav>
+  ${welcomeBanner()}
+  <nav class="chips" aria-label="Show or hide calendars">${visibleCalendars().map((c) => `<button class="chip ${S.hidden.has(c.id) ? 'off' : ''}" data-cal="${esc(c.id)}"><i style="${swatch(c.color)}"></i>${esc(c.name)}</button>`).join('')}</nav>
   <main id="view"></main>
-  ${isEditor() ? `<button class="fab" id="btnAdd" aria-label="Add event">+</button>` : ''}`;
+  ${canAdd ? `<button class="fab" id="btnAdd" aria-label="Add an event">+<span>Add</span></button>` : ''}`;
   $$('[data-view]').forEach((b) => (b.onclick = () => { S.view = b.dataset.view; store.set('view', S.view); renderMain(); }));
   $$('[data-cal]').forEach((b) => (b.onclick = () => {
     const id = b.dataset.cal;
@@ -347,16 +401,30 @@ function renderMain() {
     renderMain();
   }));
   $('#btnSettings').onclick = openSettings;
+  if ($('#welcomeX')) $('#welcomeX').onclick = () => { store.set(S.relative ? 'welcomedRel' : 'welcomedEd', '1'); renderMain(); };
   if (isEditor()) {
     $('#btnImport').onclick = () => openImport();
     $('#btnEmail').onclick = () => openImport(null, 'email');
-    $('#btnAdd').onclick = () => openEdit(null, S.view === 'month' ? S.day : todayWall());
   }
+  if (canAdd) $('#btnAdd').onclick = () => isEditor() ? openEdit(null, S.view === 'month' ? S.day : todayWall()) : openFamilyAdd(S.view === 'month' ? S.day : todayWall());
   S.view === 'month' ? renderMonth() : renderList();
 }
 
+function welcomeBanner() {
+  if (S.relative && !store.get('welcomedRel')) return `<div class="welcome"><div><b>Welcome! 👋</b> These are the Ahlersmeyer kids’ games, programs and events.
+    Tap any event for the time, place and directions.${canFamilyAdd() ? ' Tap <b>+ Add</b> to put your own family event on the calendar.' : ''}
+    ${isApple ? ' Tip: tap <b>Share → Add to Home Screen</b> to keep it one tap away.' : ''}</div><button class="btn icon ghost" id="welcomeX" aria-label="Got it">✕</button></div>`;
+  if (!S.relative && isEditor() && !store.get('welcomedEd')) return `<div class="welcome"><div><b>You’re an editor.</b> Tap <b>+ Add</b> for a new event, <b>✉︎ Email</b> to pull events from your Gmail, or <b>Import</b> to drop in a schedule PDF.
+    Relatives see everything except the <b>Family</b> calendar and anything marked 🔒.</div><button class="btn icon ghost" id="welcomeX" aria-label="Got it">✕</button></div>`;
+  return '';
+}
+
 function bindEvents(root) {
-  $$('[data-ev]', root).forEach((b) => (b.onclick = () => openDetail(b.dataset.ev)));
+  $$('[data-stop]', root).forEach((a) => a.addEventListener('click', (ev) => ev.stopPropagation()));
+  $$('[data-ev]', root).forEach((b) => {
+    b.onclick = () => openDetail(b.dataset.ev);
+    b.onkeydown = (ev) => { if (ev.key === 'Enter') openDetail(b.dataset.ev); };
+  });
 }
 
 function renderList() {
@@ -364,15 +432,36 @@ function renderList() {
   const from = todayWall(), to = addDays(from, 240);
   const idx = indexByDay(from, to);
   const days = Object.keys(idx).sort().slice(0, 90);
+  const nu = nextUp();
   if (!days.length) {
-    view.innerHTML = `<div class="empty"><p><b>Nothing coming up.</b></p><p>${isEditor() ? 'Tap + to add an event, Import to drop in a schedule, or add a team feed in Settings.' : 'Check back soon.'}</p></div>`;
+    view.innerHTML = `<div class="empty"><p><b>Nothing coming up.</b></p><p>${isEditor() ? 'Tap + Add for an event, Import to drop in a schedule, or ✉︎ Email to scan your inbox.' : 'Check back soon.'}</p></div>`;
     return;
   }
-  const tmw = addDays(from, 1);
-  view.innerHTML = days.map((d) => `
-    <section class="day"><h3>${fmtDay(d)} ${d === from ? '<span class="rel">Today</span>' : d === tmw ? '<span class="rel">Tomorrow</span>' : ''}</h3>
-    ${idx[d].map(evRow).join('')}</section>`).join('');
+  let lastWeek = '';
+  view.innerHTML = (nu ? nextCard(nu) : '') + days.map((d) => {
+    const label = dayLabel(d);
+    const week = d <= addDays(from, 6) ? 'This week' : d <= addDays(from, 13) ? 'Next week' : MONTHS[+d.slice(5, 7) - 1];
+    const wk = week !== lastWeek && week !== 'This week' ? `<div class="weekhead">${week}</div>` : '';
+    lastWeek = week;
+    return `${wk}<section class="day"><h3><span class="rel">${esc(label)}</span>${label === fmtDay(d) ? '' : `<span>${['Today', 'Tomorrow'].includes(label) ? dateLine(d) : MONTHS[+d.slice(5, 7) - 1] + ' ' + +d.slice(8)}</span>`}</h3>
+    ${idx[d].map(evRow).join('')}</section>`;
+  }).join('');
   bindEvents(view);
+}
+
+function nextCard(e) {
+  const c = calById(e.cal);
+  const d = e.start.slice(0, 10);
+  const firstNote = (e.notes || '').split(/\n|(?<=\.)\s/)[0];
+  return `<section class="next" data-ev="${esc(e.id)}" role="button" tabindex="0" style="--c:${esc(isLight(c.color) ? '#94a3b8' : c.color)}">
+    <div class="nlabel">Next up · ${esc(dayLabel(d))}${dayLabel(d) === 'Today' || dayLabel(d) === 'Tomorrow' ? '' : ''}</div>
+    <div class="ntitle">${esc(e.title)}</div>
+    <div class="nwhen">${esc(dateLine(d))} · ${esc(timeRange(e))}</div>
+    ${whoChip(c)}
+    ${firstNote && firstNote.length < 140 ? `<div class="nnote">${esc(firstNote)}</div>` : ''}
+    <div class="actions">${e.location ? `<a class="btn primary" href="${mapsUrl(e.location)}" target="_blank" rel="noopener" data-stop>📍 Directions</a>` : ''}<span class="btn">Details</span></div>
+    ${e.location ? `<div class="nwhere">${esc(e.location)}</div>` : ''}
+  </section>`;
 }
 
 function renderMonth() {
@@ -396,7 +485,7 @@ function renderMonth() {
       const evs = idx[d] || [];
       return `<button class="cell ${d.slice(0, 7) !== S.month ? 'dim' : ''} ${d === today ? 'today' : ''} ${d === S.day ? 'sel' : ''}" data-day="${d}">
         <span class="num">${+d.slice(8)}</span>
-        ${evs.slice(0, 3).map((e) => `<span class="pill" style="--c:${esc(calById(e.cal).color)}">${e.allDay ? '' : `<span class="pt">${fmtTime(e.start, true)} </span>`}${esc(e.title)}</span>`).join('')}
+        ${evs.slice(0, 3).map((e) => { const col = calById(e.cal).color; return `<span class="pill ${isLight(col) ? 'lightc' : ''}" style="--c:${esc(col)}">${e.allDay ? '' : `<span class="pt">${fmtTime(e.start, true)} </span>`}${esc(e.title)}</span>`; }).join('')}
         ${evs.length > 3 ? `<span class="more">+${evs.length - 3}</span>` : ''}</button>`;
     }).join('')}</div>
     <section class="day" id="daylist"></section>`;
@@ -416,7 +505,7 @@ function renderMonth() {
     $('#daylist').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }));
   const evs = idx[S.day] || [];
-  $('#daylist').innerHTML = `<h3>${fmtDay(S.day)}</h3>${evs.length ? evs.map(evRow).join('') : '<p class="muted">No events.</p>'}`;
+  $('#daylist').innerHTML = `<h3><span class="rel">${esc(dayLabel(S.day))}</span><span>${dateLine(S.day)}</span></h3>${evs.length ? evs.map(evRow).join('') : '<p class="muted">Nothing this day.</p>'}`;
   bindEvents($('#daylist'));
 }
 
@@ -430,37 +519,165 @@ function closeModal() { $('#modal').classList.add('hidden'); $('#sheet').innerHT
 $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
 
+/** One event as a .ics file, so anyone can add it to their own phone calendar. */
+function eventIcs(e) {
+  const fmt = (w) => w.includes('T') ? w.replace(/[-:]/g, '') + '00' : w.replace(/-/g, '');
+  const escI = (s) => String(s || '').replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/[,;]/g, '\\$&');
+  const end = e.end || (e.allDay ? addDays(e.start, 1) : addMinutes(e.start, 60));
+  const tz = e.allDay ? ';VALUE=DATE' : ';TZID=America/Indiana/Indianapolis';
+  return ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Family Calendar//EN', 'BEGIN:VEVENT', `UID:${e.id}@family-calendar`,
+    `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)}Z`, `DTSTART${tz}:${fmt(e.start)}`, `DTEND${tz}:${fmt(end)}`,
+    `SUMMARY:${escI(e.title)}`, e.location ? `LOCATION:${escI(e.location)}` : '', e.notes ? `DESCRIPTION:${escI(e.notes)}` : '',
+    'END:VEVENT', 'END:VCALENDAR'].filter(Boolean).join('\r\n');
+}
+
 function openDetail(id) {
   const e = findEvent(id);
   if (!e) return;
   const c = calById(e.cal);
-  const day = e.start.slice(0, 10);
-  let when = fmtDay(day, true);
-  if (e.allDay) {
-    const last = e.end ? addDays(e.end.slice(0, 10), -1) : day;
-    if (last > day) when += ` – ${fmtDay(last, true)}`;
-  } else when += ` · ${fmtTime(e.start)}${e.end ? ' – ' + fmtTime(e.end) : ''}`;
+  const d = e.start.slice(0, 10);
   const fromFeed = e.source === 'feed';
+  const fromFamily = e.cal === 'friends';
+  const mine = fromFamily && JSON.parse(store.get('myAdds') || '[]').includes(e.id);
+  const canEdit = isEditor() && !fromFeed && !fromFamily;
+  const canDelete = canEdit || (fromFamily && (isEditor() || mine));
   const sh = openModal(`
-    <div class="head"><div><h2>${esc(e.title)}</h2><span class="chip"><i style="background:${esc(c.color)}"></i>${esc(c.name)}</span></div>
+    <div class="head"><div><h2>${esc(e.title)}</h2>${whoChip(c)}</div>
       <button class="btn icon ghost" data-close aria-label="Close">✕</button></div>
-    <div class="meta">
-      <div>🗓 ${esc(when)}</div>
-      ${e.location ? `<div>📍 <a href="https://maps.apple.com/?q=${encodeURIComponent(e.location)}" target="_blank" rel="noopener">${esc(e.location)}</a></div>` : ''}
+    <div class="meta big">
+      <div><span class="k">When</span><b>${['Today', 'Tomorrow'].includes(dayLabel(d)) ? esc(dayLabel(d)) + ' · ' : ''}${esc(dateLine(d))}</b><br>${esc(timeRange(e))}</div>
+      ${e.location ? `<div><span class="k">Where</span><b>${esc(e.location)}</b></div>` : ''}
       ${e.notes ? `<div class="notes">${esc(e.notes)}</div>` : ''}
+      ${e.addedBy ? `<div class="help">Added by ${esc(e.addedBy)}</div>` : ''}
       ${e.private && !S.relative ? `<div class="help">🔒 Only you two — extended family doesn’t see this</div>` : ''}
       ${fromFeed ? `<div class="help">Synced from the team’s calendar — changes come from the team app.</div>` : ''}
     </div>
-    ${isEditor() && !fromFeed ? `<div class="actions"><button class="btn" id="edit">Edit</button><button class="btn danger" id="del">Delete</button></div>` : ''}`);
+    <div class="actions stack">
+      ${e.location ? `<a class="btn primary" href="${mapsUrl(e.location)}" target="_blank" rel="noopener">📍 Get directions</a>` : ''}
+      ${(e.attachments || []).map((a, i) => `<button class="btn" data-att="${i}">📎 ${esc(a.name)}</button>`).join('')}
+      <button class="btn" id="addPhone">📅 Add to my phone calendar</button>
+    </div>
+    ${canEdit || canDelete ? `<div class="actions">${canEdit ? `<button class="btn" id="edit">Edit</button>` : ''}${canDelete ? `<button class="btn danger" id="del">Delete</button>` : ''}</div>` : ''}`);
   $('[data-close]', sh).onclick = closeModal;
-  if (isEditor() && !fromFeed) {
-    $('#edit').onclick = () => openEdit(e);
-    $('#del').onclick = async () => {
-      if (!confirm(`Delete “${e.title}”?`)) return;
-      try { await saveCal((d) => { d.events = d.events.filter((x) => x.id !== e.id); }, `Delete: ${e.title}`); closeModal(); toast('Deleted'); }
-      catch (err) { toast(err.message, 5000); }
-    };
+  $('#addPhone').onclick = () => {
+    const url = URL.createObjectURL(new Blob([eventIcs(e)], { type: 'text/calendar' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = (e.title.replace(/[^\w\s-]/g, '').trim() || 'event') + '.ics';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  };
+  $$('[data-att]', sh).forEach((b) => (b.onclick = () => openAttachment(e.attachments[+b.dataset.att])));
+  if (canEdit) $('#edit').onclick = () => openEdit(e);
+  if (canDelete) $('#del').onclick = async () => {
+    if (!confirm(`Delete “${e.title}”?`)) return;
+    try {
+      if (fromFamily) await saveInbox((d) => { d.events = d.events.filter((x) => x.id !== e.id); });
+      else await saveCal((d) => { d.events = d.events.filter((x) => x.id !== e.id); }, `Delete: ${e.title}`);
+      closeModal(); toast('Deleted');
+    } catch (err) { toast(err.message, 5000); }
+  };
+}
+
+/* ---------- attachments ---------- */
+const ATT_MAX = 15 * 1024 * 1024;
+async function uploadAttachment(file) {
+  if (file.size > ATT_MAX) throw new Error(`${file.name} is too big (15 MB max)`);
+  const { data, key } = await encryptBytes(new Uint8Array(await file.arrayBuffer()));
+  const path = `attachments/${newId()}.bin`;
+  const r = await fetch(`${GH}/contents/${path}`, {
+    method: 'PUT', headers: { ...ghHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: `Attach ${file.name}`, content: bytesToB64(data), branch: CONFIG.branch }),
+  });
+  if (!r.ok) throw new Error(`Couldn’t upload ${file.name} (${r.status})`);
+  return { name: file.name.replace(/\.[^.]+$/, ''), path, key, type: file.type || 'application/pdf' };
+}
+async function openAttachment(a) {
+  const win = window.open('', '_blank'); // open now so phones don't block it
+  try {
+    if (win) win.document.write('<p style="font:16px system-ui;padding:20px">Opening…</p>');
+    const r = await fetch(`https://raw.githubusercontent.com/${CONFIG.owner}/${CONFIG.repo}/${CONFIG.branch}/${a.path}`, { cache: 'force-cache' });
+    if (!r.ok) throw new Error('Couldn’t load the file (' + r.status + ')');
+    const bytes = await decryptBytes(await r.arrayBuffer(), a.key);
+    const url = URL.createObjectURL(new Blob([bytes], { type: a.type }));
+    if (win) win.location.href = url; else location.href = url;
+  } catch (err) { if (win) win.close(); toast(err.message, 5000); }
+}
+
+/* ---------- extended family can add events (separate "inbox" repo) ---------- */
+// The inbox is a small second GitHub repo that only holds relatives' events, encrypted
+// with the extended-family passcode. Its token can only touch that repo.
+const inboxCfg = () => S.cal.inbox || null;
+const inboxKey = () => S.relative ? S.pass : S.cal.relativesPass;
+const familyAddOn = () => !!(inboxCfg()?.repo && inboxCfg()?.token && inboxKey());
+const canFamilyAdd = () => S.relative && familyAddOn();
+
+async function inboxReq(method, body) {
+  const { repo, token } = inboxCfg();
+  const r = await fetch(`https://api.github.com/repos/${repo}/contents/inbox.enc${method === 'GET' ? `?t=${Date.now()}` : ''}`, {
+    method, cache: 'no-store',
+    headers: { Accept: 'application/vnd.github+json', Authorization: 'Bearer ' + token, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  return r;
+}
+async function loadInbox() {
+  S.inbox = { events: [] };
+  if (!familyAddOn()) return;
+  try {
+    const r = await inboxReq('GET');
+    if (r.status === 404) return;
+    if (!r.ok) return;
+    const j = await r.json();
+    const data = await decryptJSON(unb64utf8(j.content), inboxKey());
+    S.inbox = { events: (data.events || []).map((e) => ({ ...e, cal: 'friends' })), sha: j.sha };
+  } catch { S.inbox = { events: [] }; }
+}
+async function saveInbox(mutate) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const r = await inboxReq('GET');
+    let data = { events: [] }, sha;
+    if (r.ok) { const j = await r.json(); sha = j.sha; data = await decryptJSON(unb64utf8(j.content), inboxKey()); }
+    else if (r.status !== 404) throw new Error('Couldn’t reach the family calendar (' + r.status + ')');
+    mutate(data);
+    const w = await inboxReq('PUT', { message: 'Family event update', content: b64utf8(await encryptJSON(data, inboxKey())), ...(sha ? { sha } : {}) });
+    if (w.ok) { S.inbox = { events: data.events.map((e) => ({ ...e, cal: 'friends' })) }; renderMain(); return; }
+    if (w.status === 409 || w.status === 422) continue;
+    throw new Error('Couldn’t save (' + w.status + ')');
   }
+  throw new Error('Someone else is saving right now — try again.');
+}
+
+function openFamilyAdd(day) {
+  const name = store.get('myName') || '';
+  const sh = openModal(`
+    <div class="head"><div><h2>Add a family event</h2><p class="help">Everyone in the family will see it — birthdays, dinners, visits, anything.</p></div>
+      <button class="btn icon ghost" data-close aria-label="Close">✕</button></div>
+    <form id="ff">
+      <label class="f">What’s happening?</label><input class="in" name="title" required placeholder="e.g. Grandma’s birthday dinner">
+      <div class="two"><div><label class="f">Date</label><input class="in" type="date" name="date" value="${day}" required></div>
+        <div><label class="f">Time <span class="muted">(optional)</span></label><input class="in" type="time" name="time"></div></div>
+      <label class="f">Where? <span class="muted">(optional)</span></label><input class="in" name="location" placeholder="Address or place name">
+      <label class="f">Anything else? <span class="muted">(optional)</span></label><textarea class="in" name="notes" style="min-height:70px"></textarea>
+      <label class="f">Your name</label><input class="in" name="who" value="${esc(name)}" required placeholder="So everyone knows who added it">
+      <div class="actions"><button class="btn primary big">Add to calendar</button></div>
+    </form>`);
+  $('[data-close]', sh).onclick = closeModal;
+  const f = $('#ff');
+  f.onsubmit = async (ev) => {
+    ev.preventDefault();
+    const date = f.date.value, time = f.time.value;
+    const start = time ? `${date}T${time}` : date;
+    const e = { id: newId(), title: f.title.value.trim(), start, end: time ? addMinutes(start, 90) : addDays(date, 1), allDay: !time,
+      location: f.location.value.trim(), notes: f.notes.value.trim(), addedBy: f.who.value.trim(), source: 'family' };
+    store.set('myName', e.addedBy);
+    const btn = $('button.primary', f);
+    btn.disabled = true; btn.textContent = 'Adding…';
+    try {
+      await saveInbox((d) => { d.events = [...(d.events || []), e]; });
+      store.set('myAdds', JSON.stringify([...JSON.parse(store.get('myAdds') || '[]'), e.id].slice(-300)));
+      closeModal(); toast('Added — thanks!');
+    } catch (err) { btn.disabled = false; btn.textContent = 'Add to calendar'; toast(err.message, 5000); }
+  };
 }
 
 function calOptions(sel) {
@@ -481,14 +698,22 @@ function openEdit(e, day) {
         <div class="alld ${e.allDay ? '' : 'hidden'}"><label class="f">Through</label><input class="in" type="date" name="last" value="${lastDay}"></div></div>
       <label class="check"><input type="checkbox" name="allDay" ${e.allDay ? 'checked' : ''}> All day</label>
       <label class="check"><input type="checkbox" name="priv" ${e.private ? 'checked' : ''}> Only us (hide from extended family)</label>
+      <p class="help">The Family calendar is always just you two. Sports, school and church calendars are shared with relatives unless you check this.</p>
       <div class="two timed ${e.allDay ? 'hidden' : ''}"><div><label class="f">Starts</label><input class="in" type="time" name="st" value="${e.allDay ? '18:00' : e.start.slice(11, 16)}"></div>
         <div><label class="f">Ends</label><input class="in" type="time" name="et" value="${!e.allDay && e.end ? e.end.slice(11, 16) : ''}"></div></div>
       <label class="f">Where</label><input class="in" name="location" value="${esc(e.location)}">
       <label class="f">Notes</label><textarea class="in" name="notes" style="min-height:80px">${esc(e.notes)}</textarea>
+      <label class="f">Attachments <span class="muted">(schedule, bracket, flyer — PDF or photo)</span></label>
+      <div id="atts">${(e.attachments || []).map((a, i) => `<div class="att"><span>📎 ${esc(a.name)}</span><button type="button" class="btn icon ghost" data-rm="${i}" aria-label="Remove">✕</button></div>`).join('')}</div>
+      <label class="dropzone small"><input type="file" name="files" accept="application/pdf,image/*" multiple hidden><b>+ Attach a file</b></label>
+      <div id="newatts" class="help"></div>
       <div class="actions"><button class="btn primary">Save</button></div>
     </form>`);
   $('[data-close]', sh).onclick = closeModal;
   const f = $('#ef');
+  let keep = [...(e.attachments || [])];
+  $$('[data-rm]', f).forEach((b) => (b.onclick = () => { keep = keep.filter((_, i) => i !== +b.dataset.rm); b.closest('.att').remove(); }));
+  f.files.onchange = () => { $('#newatts').textContent = [...f.files.files].map((x) => '📎 ' + x.name).join('  '); };
   f.allDay.onchange = () => { $('.timed', f).classList.toggle('hidden', f.allDay.checked); $('.alld', f).classList.toggle('hidden', !f.allDay.checked); };
   f.onsubmit = async (ev) => {
     ev.preventDefault();
@@ -509,6 +734,13 @@ function openEdit(e, day) {
     const btn = $('button.primary', f);
     btn.disabled = true; btn.textContent = 'Saving…';
     try {
+      const added = [];
+      for (const file of f.files.files) {
+        btn.textContent = `Uploading ${file.name}…`;
+        added.push(await uploadAttachment(file));
+      }
+      out.attachments = [...keep, ...added];
+      if (!out.attachments.length) delete out.attachments;
       await saveCal((d) => {
         const i = d.events.findIndex((x) => x.id === out.id);
         i >= 0 ? (d.events[i] = out) : d.events.push(out);
@@ -675,7 +907,7 @@ function renderReview({ icsEvents = [], textRows = [], notes = [], label, cal })
 /* ---------- email scanning (Gmail, read-only, runs in the browser) ---------- */
 const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const GMAIL_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
-const MAIL_QUERY = '-category:promotions -category:social (filename:ics OR invite OR invitation OR schedule OR practice OR game OR games OR tournament OR rehearsal OR recital OR program OR concert OR party OR appointment OR "save the date" OR reminder OR choir OR sing OR singing OR "field trip" OR conference OR meet OR tryouts OR banquet OR birthday OR camp OR clinic)';
+const MAIL_QUERY = '-category:promotions -category:social -category:forums -in:spam (filename:ics OR invite OR invitation OR schedule OR practice OR game OR games OR tournament OR rehearsal OR recital OR program OR concert OR party OR appointment OR "save the date" OR reminder OR choir OR sing OR singing OR "field trip" OR conference OR meet OR tryouts OR banquet OR birthday OR camp OR clinic)';
 
 let gisReady;
 function loadGIS() {
@@ -772,22 +1004,27 @@ async function extractMail(m, token) {
       else if (mt === 'text/html') html += b64url(p.body.data) + '\n';
     }
   }
-  const guess = guessCalText(`${subject} ${from} ${(plain || htmlToText(html)).slice(0, 800)}`);
-  if (!items.length) {
+  const body = trimBody(plain || htmlToText(html));
+  const guess = guessCalText(`${subject} ${from} ${body.slice(0, 800)}`);
+  const bulk = !!(h['list-unsubscribe'] || /bulk|list/i.test(h.precedence || ''));
+  const mail = classifyMail({ subject, from, body, bulk, hasInvite: items.length > 0 });
+  if (!items.length && !mail.junk) {
     const today = todayWall(), keys = new Set();
     const cleanSubject = subject.replace(/^((re|fwd?|fw):\s*)+/i, '').slice(0, 70);
-    for (const r of parseScheduleText(cleanSubject + '\n' + trimBody(plain || htmlToText(html)))) {
+    for (const r of mergeRows(parseScheduleText(splitSentences(cleanSubject + '\n' + body)))) {
       if (r.date < today || r.date > addDays(today, 400)) continue;
+      const score = scoreRow(r, mail);
+      if (score < KEEP_SCORE) continue;
       const k = r.date + '|' + r.time;
       if (keys.has(k)) continue;
       keys.add(k);
       const words = (r.title || '').split(/\s+/).length;
       const title = r.title && r.title.length >= 3 && words <= 7 ? r.title : cleanSubject;
-      items.push({ kind: 'txt', row: { ...r, title } });
+      items.push({ kind: 'txt', score, row: { ...r, title } });
       if (items.length >= 8) break;
     }
   }
-  return { id: m.id, subject, from, items, guess };
+  return { id: m.id, subject, from, items, guess, junk: mail.junk };
 }
 
 async function runEmailScan(token) {
@@ -826,7 +1063,7 @@ function renderEmailReview(found, ids) {
   const existing = new Set(allEvents().map((e) => e.title.toLowerCase() + '|' + e.start));
   if (!found.length) {
     markSeen(ids);
-    review.innerHTML = `<p class="muted">${ids.length ? `Checked ${ids.length} new email${ids.length === 1 ? '' : 's'} — no upcoming events found.` : 'No new emails to check.'}</p>`;
+    review.innerHTML = `<p class="muted">${ids.length ? `Checked ${ids.length} new email${ids.length === 1 ? '' : 's'} — nothing you need to be at.` : 'No new emails to check.'}</p>`;
     return;
   }
   const rowOf = (it) => it.kind === 'ics'
@@ -834,13 +1071,13 @@ function renderEmailReview(found, ids) {
     : { title: it.row.title, date: it.row.date, time: it.row.time || '', location: it.row.location || '' };
   review.innerHTML = `
     <h4>Events in ${found.length} email${found.length === 1 ? '' : 's'}</h4>
-    <p class="help">Calendar invites are pre-checked. For the rest, check what’s real and fix anything that looks off — each row can go to a different calendar.</p>
+    <p class="help">Spam, sales, receipts, deliveries and money/stock emails are already filtered out. The likely events are checked — uncheck anything that isn’t a place you need to be, and fix titles if needed.</p>
     <div id="rows">${found.map((f, mi) => `
       <div class="mail"><div class="mailhead"><b>${esc(f.subject)}</b><small>${esc(f.from)}</small></div>
       ${f.items.map((it, ii) => {
         const r = rowOf(it);
         const dupe = existing.has(r.title.toLowerCase() + '|' + (r.time ? `${r.date}T${r.time}` : r.date));
-        return `<div class="rrow" data-m="${mi}" data-i="${ii}"><input type="checkbox" ${it.kind === 'ics' && !dupe ? 'checked' : ''}>
+        return `<div class="rrow" data-m="${mi}" data-i="${ii}"><input type="checkbox" ${(it.kind === 'ics' || it.score >= CHECK_SCORE) && !dupe ? 'checked' : ''}>
           <div class="fields">
             <input class="in full" data-f="title" value="${esc(r.title)}" placeholder="Title">
             <input class="in" type="date" data-f="date" value="${r.date}">
@@ -942,6 +1179,9 @@ function openSettings() {
       </details>
       <div class="actions"><button class="btn" id="syncNow">Sync team feeds now</button></div>` : ''}
 
+    <h4>Text size</h4>
+    <div class="seg"><button data-size="" class="${!store.get('textSize') ? 'on' : ''}">Normal</button><button data-size="big" class="${store.get('textSize') === 'big' ? 'on' : ''}">Larger</button><button data-size="huge" class="${store.get('textSize') === 'huge' ? 'on' : ''}">Largest</button></div>
+
     <h4>This device</h4>
     ${S.relative ? '' : `<label class="f">GitHub token (only needed to add or change events)</label>
     <input class="in" id="tok" type="password" value="${esc(S.token || '')}" placeholder="github_pat_…">`}
@@ -954,6 +1194,19 @@ function openSettings() {
     <label class="f">Google OAuth Client ID</label>
     <input class="in" id="gcid" autocomplete="off" value="${esc(googleClientId())}" placeholder="1234…apps.googleusercontent.com">
     <div class="actions"><button class="btn" id="saveGcid">Save</button></div>` : ''}
+
+    ${isEditor() ? `<h4>Let relatives add events</h4>
+    ${familyAddOn() ? `<p class="help ok">✓ On — relatives see a <b>+ Add</b> button. Their events show on “Family & Friends”.</p>` : `<p class="help">Relatives can add their own events (birthdays, dinners, visits) with a simple form. One-time setup:</p>
+    <ol class="steps help">
+      <li>On GitHub, create a new <b>private</b> repository named <code>family-calendar-inbox</code> (check “Add a README”).</li>
+      <li>Create a fine-grained token for <b>only that repo</b> with <b>Contents: Read and write</b>.</li>
+      <li>Paste it below and save. (Set the extended family passcode first.)</li>
+    </ol>`}
+    <label class="f">Inbox repository</label>
+    <input class="in" id="inRepo" value="${esc(inboxCfg()?.repo || CONFIG.owner + '/family-calendar-inbox')}">
+    <label class="f">Inbox token</label>
+    <input class="in" id="inTok" type="password" value="${esc(inboxCfg()?.token || '')}" placeholder="github_pat_…">
+    <div class="actions"><button class="btn" id="saveInbox">Save</button></div>` : ''}
 
     ${isEditor() ? `<h4>Extended family</h4>
     <p class="help">Relatives get their own passcode and only see calendars marked “Extended family can see” (sports, church, etc.). Your Family calendar stays private. Updates reach them about a minute after you save.</p>
@@ -1022,6 +1275,22 @@ function openSettings() {
     try { await saveCal((d) => { if (v) d.googleClientId = v; else delete d.googleClientId; }, 'Update email scanning'); closeModal(); toast(v ? 'Email scanning is on — tap ✉︎ Scan email' : 'Email scanning turned off', 4000); }
     catch (err) { toast(err.message, 5000); }
   };
+  $$('[data-size]', sh).forEach((b) => (b.onclick = () => { store.set('textSize', b.dataset.size || null); applyTextSize(); closeModal(); openSettings(); }));
+  if ($('#saveInbox')) $('#saveInbox').onclick = async () => {
+    const repo = $('#inRepo').value.trim().replace(/^https:\/\/github\.com\//, '').replace(/\.git$/, ''), token = $('#inTok').value.trim();
+    if (!S.cal.relativesPass) return toast('Set the extended family passcode first (just below)', 5000);
+    if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !token) return toast('Fill in the repository and token', 4000);
+    const btn = $('#saveInbox'); btn.disabled = true; btn.textContent = 'Checking…';
+    try {
+      const r = await fetch(`https://api.github.com/repos/${repo}`, { headers: { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json' } });
+      if (!r.ok) throw new Error(r.status === 404 ? 'Can’t find that repository with this token' : 'Token was rejected (' + r.status + ')');
+      const j = await r.json();
+      if (!j.permissions?.push) throw new Error('This token can’t write to that repository — give it Contents: Read and write');
+      await saveCal((d) => { d.inbox = { repo, token }; }, 'Let relatives add events');
+      await loadInbox();
+      closeModal(); toast('Done — relatives can now add events', 4000);
+    } catch (err) { btn.disabled = false; btn.textContent = 'Save'; toast(err.message, 6000); }
+  };
   if ($('#saveRel')) $('#saveRel').onclick = async () => {
     const v = $('#relPass').value.trim();
     if (v && v.length < 6) return toast('Use at least 6 characters');
@@ -1049,6 +1318,7 @@ async function refresh() {
     const f = await readFile(S.relative ? SHARED_FILE : CAL_FILE);
     if (f.text) { S.cal = await decryptJSON(f.text, S.pass); if (!S.relative) S.calSalt = saltOf(f.text); }
     await loadFeeds();
+    await loadInbox();
     S.loadedAt = Date.now();
     renderMain();
   } catch {}
@@ -1057,4 +1327,10 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && S.pass && Date.now() - S.loadedAt > 5 * 60 * 1000) refresh();
 });
 
+function applyTextSize() {
+  document.documentElement.classList.remove('big', 'huge');
+  const t = store.get('textSize');
+  if (t) document.documentElement.classList.add(t);
+}
+applyTextSize();
 boot();

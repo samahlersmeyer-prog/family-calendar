@@ -60,6 +60,7 @@ const rel = cal.relativesPass;
 if (rel) {
   const sharedCal = {
     title: cal.title,
+    ...(cal.inbox ? { inbox: cal.inbox } : {}),
     calendars: cal.calendars.filter(isShared).map(({ id, name, color }) => ({ id, name, color })),
     events: cal.events.filter((e) => sharedIds.has(e.cal) && !e.private),
   };
