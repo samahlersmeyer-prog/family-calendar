@@ -161,3 +161,20 @@ a.btn { text-decoration: none; display: inline-block; }
 .dropzone.small { padding: 12px; margin-top: 6px; }
 .pill.lightc { border-left-color: var(--muted); background: color-mix(in srgb, var(--muted) 15%, transparent); }
 .steps.help { font-size: 14px; }
+
+/* ---- bottom menu ---- */
+main { padding-bottom: calc(110px + env(safe-area-inset-bottom)); }
+.fab { display: none; }
+.tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 8; display: flex; justify-content: space-around; gap: 2px;
+  padding: 6px 6px calc(6px + env(safe-area-inset-bottom)); background: color-mix(in srgb, var(--card) 92%, transparent);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-top: 1px solid var(--line); }
+.tabbar button { flex: 1; max-width: 120px; border: 0; background: transparent; display: flex; flex-direction: column; align-items: center; gap: 2px;
+  font-size: 12px; font-weight: 700; color: var(--muted); padding: 6px 0; border-radius: 12px; }
+.tabbar button span { font-size: 22px; line-height: 1; }
+.tabbar button:active { background: var(--soft); }
+.tabbar .addtab span { width: 40px; height: 40px; border-radius: 50%; background: var(--accent); color: #fff; display: grid; place-items: center; font-size: 26px; margin-top: -2px; }
+.tabbar .addtab { color: var(--ink); }
+.toast { bottom: calc(92px + env(safe-area-inset-bottom)); }
+.steps-card { background: var(--soft); border-radius: 12px; padding: 12px 14px; font-size: 15px; line-height: 1.45; margin: 6px 0 4px; }
+.qr { display: flex; justify-content: center; padding: 12px; background: #fff; border-radius: 12px; width: fit-content; margin: 8px auto; }
+.qr:empty { display: none; }

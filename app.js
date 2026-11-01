@@ -1,9 +1,9 @@
-import { encryptJSON, decryptJSON, saltOf, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=9';
-import { parseICS, hashId } from './lib/ics.js?v=9';
-import { parseScheduleText } from './lib/schedule-text.js?v=9';
-import { todayWall, addDays, addMinutes, dow, validDate, utcToWall } from './lib/tz.js?v=9';
-import { WORKFLOW_PATH, WORKFLOW_YML } from './lib/workflow.js?v=9';
-import { classifyMail, scoreRow, mergeRows, splitSentences, KEEP_SCORE, CHECK_SCORE } from './lib/mail-filter.js?v=9';
+import { encryptJSON, decryptJSON, saltOf, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=10';
+import { parseICS, hashId } from './lib/ics.js?v=10';
+import { parseScheduleText } from './lib/schedule-text.js?v=10';
+import { todayWall, addDays, addMinutes, dow, validDate, utcToWall } from './lib/tz.js?v=10';
+import { WORKFLOW_PATH, WORKFLOW_YML } from './lib/workflow.js?v=10';
+import { classifyMail, scoreRow, mergeRows, splitSentences, KEEP_SCORE, CHECK_SCORE } from './lib/mail-filter.js?v=10';
 
 /* ---------- config ---------- */
 const CONFIG = (() => {
@@ -204,6 +204,7 @@ async function unlock(pass, remember) {
   if (remember) store.set('pass', pass);
   await loadFeeds();
   await loadInbox();
+  await claimEditorLink();
   if (isEditor()) migrate();
   S.loadedAt = Date.now();
   renderMain();
@@ -394,23 +395,27 @@ function evRow(e) {
 
 /* ---------- main screen ---------- */
 function renderMain() {
+  const family = !S.relative; // you and Emily (with or without this phone set up yet)
   const canAdd = isEditor() || canFamilyAdd();
+  const day = () => (S.view === 'month' ? S.day : todayWall());
   app.innerHTML = `
   <header class="top">
     <div class="row1">
       <div class="brand">${esc(S.cal.title || 'Family Calendar')}</div>
-      <button class="btn icon" id="btnSettings" aria-label="Settings">⚙︎</button>
     </div>
     <div class="row2">
       <div class="seg"><button data-view="list" class="${S.view === 'list' ? 'on' : ''}">Upcoming</button><button data-view="month" class="${S.view === 'month' ? 'on' : ''}">Month</button></div>
-      <span class="spacer"></span>
-      ${isEditor() ? `<button class="btn" id="btnEmail">✉︎ Email</button><button class="btn" id="btnImport">Import</button>` : ''}
     </div>
   </header>
   ${welcomeBanner()}
   <nav class="chips" aria-label="Show or hide calendars">${visibleCalendars().map((c) => `<button class="chip ${S.hidden.has(c.id) ? 'off' : ''}" data-cal="${esc(c.id)}"><i style="${swatch(c.color)}"></i>${esc(c.name)}</button>`).join('')}</nav>
   <main id="view"></main>
-  ${canAdd ? `<button class="fab" id="btnAdd" aria-label="Add an event">+<span>Add</span></button>` : ''}`;
+  <nav class="tabbar" aria-label="Menu">
+    <button data-tab="cal"><span>📅</span>Calendar</button>
+    ${family || canAdd ? `<button data-tab="add" class="addtab"><span>＋</span>Add</button>` : ''}
+    ${family ? `<button data-tab="email"><span>✉️</span>Email</button><button data-tab="import"><span>📄</span>Import</button>` : ''}
+    <button data-tab="settings"><span>⚙️</span>Settings</button>
+  </nav>`;
   $$('[data-view]').forEach((b) => (b.onclick = () => { S.view = b.dataset.view; store.set('view', S.view); renderMain(); }));
   $$('[data-cal]').forEach((b) => (b.onclick = () => {
     const id = b.dataset.cal;
@@ -418,14 +423,58 @@ function renderMain() {
     store.set('hidden', JSON.stringify([...S.hidden]));
     renderMain();
   }));
-  $('#btnSettings').onclick = openSettings;
   if ($('#welcomeX')) $('#welcomeX').onclick = () => { store.set(S.relative ? 'welcomedRel' : 'welcomedEd', '1'); renderMain(); };
-  if (isEditor()) {
-    $('#btnImport').onclick = () => openImport();
-    $('#btnEmail').onclick = () => openImport(null, 'email');
-  }
-  if (canAdd) $('#btnAdd').onclick = () => isEditor() ? openEdit(null, S.view === 'month' ? S.day : todayWall()) : openFamilyAdd(S.view === 'month' ? S.day : todayWall());
+  const needEditor = (fn) => () => (isEditor() ? fn() : openUnlockEditor(fn));
+  const actions = {
+    cal: () => { if (S.view !== 'list') { S.view = 'list'; store.set('view', 'list'); renderMain(); } scrollTo({ top: 0, behavior: 'smooth' }); },
+    add: () => (S.relative ? openFamilyAdd(day()) : needEditor(() => openEdit(null, day()))()),
+    email: needEditor(() => openImport(null, 'email')),
+    import: needEditor(() => openImport()),
+    settings: openSettings,
+  };
+  $$('[data-tab]', $('.tabbar')).forEach((b) => (b.onclick = () => actions[b.dataset.tab]()));
   S.view === 'month' ? renderMonth() : renderList();
+}
+
+/* ---------- editor setup on a new phone ---------- */
+function openUnlockEditor(then) {
+  const sh = openModal(`
+    <div class="head"><div><h2>Set up this phone</h2><p class="help">One time per phone. After this you can add events, scan email and import schedules here.</p></div>
+      <button class="btn icon ghost" data-close aria-label="Close">✕</button></div>
+    <div class="steps-card">
+      <b>Easiest:</b> on a phone or computer that’s already set up, open <b>⚙️ Settings → Set up another phone</b>, then scan the QR code with this phone’s camera (or open the link it gives you).
+    </div>
+    <label class="f">Or paste the GitHub token</label>
+    <input class="in" id="unTok" type="password" placeholder="github_pat_…" autocomplete="off">
+    <div class="actions"><button class="btn primary big" id="unGo">Set up this phone</button></div>`);
+  $('[data-close]', sh).onclick = closeModal;
+  $('#unGo').onclick = async () => {
+    const t = $('#unTok').value.trim();
+    if (!/^(github_pat_|ghp_)/.test(t)) return toast('That doesn’t look like a GitHub token', 4000);
+    if (!(await checkToken(t))) return toast('That token didn’t work for this calendar', 5000);
+    S.token = t; store.set('token', t); closeModal(); renderMain(); toast('This phone is set up ✓');
+    if (then) then();
+  };
+}
+async function checkToken(t) {
+  try {
+    const r = await fetch(GH, { headers: { Authorization: 'Bearer ' + t, Accept: 'application/vnd.github+json' } });
+    return r.ok && (await r.json()).permissions?.push;
+  } catch { return false; }
+}
+/** A link that sets up another phone: the token travels encrypted with the family passcode. */
+async function editorLink() {
+  const blob = await encryptJSON({ t: S.token }, S.pass);
+  return location.origin + location.pathname + '#editor=' + encodeURIComponent(btoa(blob));
+}
+async function claimEditorLink() {
+  const m = location.hash.match(/editor=([^&]+)/);
+  if (!m || S.relative || !S.pass) return;
+  history.replaceState(null, '', location.pathname + location.search);
+  try {
+    const { t } = await decryptJSON(atob(decodeURIComponent(m[1])), S.pass);
+    if (t && (await checkToken(t))) { S.token = t; store.set('token', t); renderMain(); toast('This phone is set up to add and edit ✓', 4000); }
+  } catch { toast('That setup link didn’t match this calendar’s passcode', 5000); }
 }
 
 function welcomeBanner() {
@@ -595,6 +644,14 @@ function openDetail(id) {
     } catch (err) { toast(err.message, 5000); }
   };
 }
+
+let qrReady;
+const loadQR = () => (qrReady ||= new Promise((res, rej) => {
+  const sc = document.createElement('script');
+  sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
+  sc.onload = res; sc.onerror = () => { qrReady = null; rej(); };
+  document.head.appendChild(sc);
+}));
 
 /* ---------- attachments ---------- */
 const ATT_MAX = 15 * 1024 * 1024;
@@ -1197,6 +1254,11 @@ function openSettings() {
       </details>
       <div class="actions"><button class="btn" id="syncNow">Sync team feeds now</button></div>` : ''}
 
+    ${isEditor() ? `<h4>Set up another phone</h4>
+    <p class="help">For Emily (or your own phone): scan this with the phone’s camera, or send the link. They’ll enter the family passcode and that phone can add events and scan email.</p>
+    <div id="qr" class="qr"></div>
+    <div class="actions"><button class="btn" id="copySetup">Copy setup link</button></div>` : !S.relative ? `<h4>This phone</h4><p class="help">This phone can only view. <a href="#" id="unlockHere">Set it up to add events and scan email</a>.</p>` : ''}
+
     <h4>Text size</h4>
     <div class="seg"><button data-size="" class="${!store.get('textSize') ? 'on' : ''}">Normal</button><button data-size="big" class="${store.get('textSize') === 'big' ? 'on' : ''}">Larger</button><button data-size="huge" class="${store.get('textSize') === 'huge' ? 'on' : ''}">Largest</button></div>
 
@@ -1293,6 +1355,13 @@ function openSettings() {
     try { await saveCal((d) => { if (v) d.googleClientId = v; else delete d.googleClientId; }, 'Update email scanning'); closeModal(); toast(v ? 'Email scanning is on — tap ✉︎ Scan email' : 'Email scanning turned off', 4000); }
     catch (err) { toast(err.message, 5000); }
   };
+  if ($('#unlockHere')) $('#unlockHere').onclick = (ev) => { ev.preventDefault(); openUnlockEditor(); };
+  if ($('#copySetup')) {
+    editorLink().then((link) => {
+      $('#copySetup').onclick = async () => { try { await navigator.clipboard.writeText(link); toast('Setup link copied — text it to Emily'); } catch { prompt('Copy this link:', link); } };
+      loadQR().then(() => { const el = $('#qr'); if (el && window.QRCode) new window.QRCode(el, { text: link, width: 180, height: 180, correctLevel: window.QRCode.CorrectLevel.L }); }).catch(() => {});
+    });
+  }
   $$('[data-size]', sh).forEach((b) => (b.onclick = () => { store.set('textSize', b.dataset.size || null); applyTextSize(); closeModal(); openSettings(); }));
   if ($('#saveInbox')) $('#saveInbox').onclick = async () => {
     const repo = $('#inRepo').value.trim().replace(/^https:\/\/github\.com\//, '').replace(/\.git$/, ''), token = $('#inTok').value.trim();
