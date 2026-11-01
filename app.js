@@ -1,9 +1,9 @@
-import { encryptJSON, decryptJSON, saltOf, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=7';
-import { parseICS, hashId } from './lib/ics.js?v=7';
-import { parseScheduleText } from './lib/schedule-text.js?v=7';
-import { todayWall, addDays, addMinutes, dow, validDate, utcToWall } from './lib/tz.js?v=7';
-import { WORKFLOW_PATH, WORKFLOW_YML } from './lib/workflow.js?v=7';
-import { classifyMail, scoreRow, mergeRows, splitSentences, KEEP_SCORE, CHECK_SCORE } from './lib/mail-filter.js?v=7';
+import { encryptJSON, decryptJSON, saltOf, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=8';
+import { parseICS, hashId } from './lib/ics.js?v=8';
+import { parseScheduleText } from './lib/schedule-text.js?v=8';
+import { todayWall, addDays, addMinutes, dow, validDate, utcToWall } from './lib/tz.js?v=8';
+import { WORKFLOW_PATH, WORKFLOW_YML } from './lib/workflow.js?v=8';
+import { classifyMail, scoreRow, mergeRows, splitSentences, KEEP_SCORE, CHECK_SCORE } from './lib/mail-filter.js?v=8';
 
 /* ---------- config ---------- */
 const CONFIG = (() => {
@@ -940,7 +940,7 @@ function emailPane() {
     <label class="f">Look back</label>
     <select class="in" id="days">
       ${since ? `<option value="${since}">Since my last scan (${since} day${since === 1 ? '' : 's'})</option>` : ''}
-      ${[7, 14, 30, 60].map((d) => `<option value="${d}" ${!since && d === 14 ? 'selected' : ''}>Last ${d} days</option>`).join('')}
+      ${[7, 14, 30, 60].map((d) => `<option value="${d}" ${!since && d === 30 ? 'selected' : ''}>Last ${d} days</option>`).join('')}
     </select>
     <div class="actions"><button class="btn primary" id="scanBtn">Sign in with Google &amp; scan</button></div>`;
 }
