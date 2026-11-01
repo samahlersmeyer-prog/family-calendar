@@ -1,0 +1,63 @@
+rules_version = '2';
+// Family Calendar security rules.
+// - Sam (owner) and anyone in a space's `editors` list can change everything.
+// - Anyone holding the space's secret id (the family link) can read shared events
+//   and add events to the "Family & Friends" calendar.
+// - Private events (Family calendar, or marked "only us") are readable by editors only.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function me() { return request.auth != null ? request.auth.token.email.lower() : ''; }
+    function isOwner() { return me() in ['sam.ahlersmeyer@gmail.com', 'samahlersmeyer@gmail.com']; }
+    function isEditor(space) {
+      return isOwner() || (request.auth != null && me() in get(/databases/$(database)/documents/spaces/$(space)).data.editors);
+    }
+
+    // Where a signed-in editor finds their calendar.
+    match /editors/{email} {
+      allow get: if me() == email || isOwner();
+      allow list: if false;
+      allow create, update: if isEditor(request.resource.data.space);
+      allow delete: if isEditor(resource.data.space);
+    }
+
+    // Family code ("Ahlersmeyer") → calendar. Stored hashed; can't be listed.
+    match /codes/{h} {
+      allow get: if true;
+      allow list: if false;
+      allow create, update: if isEditor(request.resource.data.space);
+      allow delete: if isEditor(resource.data.space);
+    }
+
+    match /spaces/{space} {
+      allow get: if true;          // needs the secret id
+      allow list: if false;        // nobody can browse for spaces
+      allow create: if isOwner();
+      allow update, delete: if isEditor(space);
+
+      match /events/{eventId} {
+        allow get, list: if resource.data.shared == true || isEditor(space);
+        allow create: if isEditor(space) || (
+          request.resource.data.cal == 'friends'
+          && request.resource.data.shared == true
+          && request.resource.data.addedBy is string
+          && request.resource.data.addedBy.size() < 80
+          && request.resource.data.title is string
+          && request.resource.data.title.size() < 200
+          && request.resource.data.keys().hasOnly(['id', 'cal', 'title', 'start', 'end', 'allDay', 'location', 'notes', 'addedBy', 'source', 'shared', 'createdAt'])
+        );
+        allow update, delete: if isEditor(space);
+      }
+
+      match /files/{fileId} {
+        allow get: if true;
+        allow list: if false;
+        allow write: if isEditor(space);
+        match /chunks/{n} {
+          allow get: if true;
+          allow list: if false;
+          allow write: if isEditor(space);
+        }
+      }
+    }
+  }
+}

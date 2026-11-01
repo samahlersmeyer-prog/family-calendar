@@ -1,42 +1,18 @@
-import { encryptJSON, decryptJSON, saltOf, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=10';
-import { parseICS, hashId } from './lib/ics.js?v=10';
-import { parseScheduleText } from './lib/schedule-text.js?v=10';
-import { todayWall, addDays, addMinutes, dow, validDate, utcToWall } from './lib/tz.js?v=10';
-import { WORKFLOW_PATH, WORKFLOW_YML } from './lib/workflow.js?v=10';
-import { classifyMail, scoreRow, mergeRows, splitSentences, KEEP_SCORE, CHECK_SCORE } from './lib/mail-filter.js?v=10';
+import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=12';
+import { parseICS, hashId } from './lib/ics.js?v=12';
+import { parseScheduleText } from './lib/schedule-text.js?v=12';
+import { todayWall, addDays, addMinutes, dow, validDate, utcToWall } from './lib/tz.js?v=12';
+import { classifyMail, scoreRow, mergeRows, splitSentences, KEEP_SCORE, CHECK_SCORE } from './lib/mail-filter.js?v=12';
+import { initCloud } from './lib/cloud.js?v=12';
 
 /* ---------- config ---------- */
-const CONFIG = (() => {
-  const q = new URLSearchParams(location.search);
-  let owner = 'samahlersmeyer-prog', repo = 'family-calendar';
-  const m = location.hostname.match(/^([^.]+)\.github\.io$/i);
-  if (m) {
-    owner = m[1];
-    const seg = location.pathname.split('/').filter(Boolean)[0];
-    if (seg && !seg.includes('.')) repo = seg;
-  }
-  if (q.get('repo')) [owner, repo] = q.get('repo').split('/');
-  return { owner, repo, branch: q.get('branch') || 'main' };
-})();
-const GH = `https://api.github.com/repos/${CONFIG.owner}/${CONFIG.repo}`;
-const CAL_FILE = 'data/calendar.enc';
-const FEEDS_FILE = 'data/feeds.enc';
-
-const DEFAULT_CALENDARS = [
-  { id: 'family', name: 'Family', color: '#2563eb', shared: false },
-  { id: 'mad-apple', name: 'Mad Apple', color: '#dc2626', shared: true },
-  { id: 'hc-basketball', name: 'Holy Cross Basketball', color: '#7c3aed', shared: true },
-  { id: 'max-xc', name: 'Max XC', color: '#059669', shared: true },
-  { id: 'theo-baseball', name: 'Theo Baseball', color: '#ea580c', shared: true },
-  { id: 'church', name: 'Church & Kids Programs', color: '#ca8a04', shared: true },
-];
-// Calendars made before sharing existed: everything except "family" is shared.
+const CONFIG = { owner: 'samahlersmeyer-prog', repo: 'family-calendar', branch: 'main' };
+const RAW = `https://raw.githubusercontent.com/${CONFIG.owner}/${CONFIG.repo}/${CONFIG.branch}/`;
+const OWNERS = ['sam.ahlersmeyer@gmail.com', 'samahlersmeyer@gmail.com'];
 const isShared = (c) => c.shared ?? c.id !== 'family';
-const SHARED_FILE = 'data/shared.enc';
-// Google OAuth Client ID for Gmail scanning (not a secret; Settings can override it).
+// Google OAuth Client ID for Gmail scanning (not a secret).
 const GOOGLE_CLIENT_ID = '854962669636-0i9dhtsofh30onsch64boiqmj804uhf3.apps.googleusercontent.com';
-const googleClientId = () => S.cal?.googleClientId || GOOGLE_CLIENT_ID;
-const FEEDS_SHARED_FILE = 'data/feeds-shared.enc';
+const googleClientId = () => GOOGLE_CLIENT_ID;
 
 /* ---------- small helpers ---------- */
 const $ = (s, el = document) => el.querySelector(s);
@@ -76,10 +52,10 @@ function fmtDay(day, long = false) {
 
 /* ---------- state ---------- */
 const S = {
-  pass: null,
-  token: store.get('token'),
+  user: null,          // signed-in Google account
+  editor: false,       // Sam or Emily
+  space: store.get('space'),
   cal: null,
-  calSalt: null,
   feeds: { events: [], status: {} },
   inbox: { events: [] },
   hidden: new Set(JSON.parse(store.get('hidden') || '[]')),
@@ -87,209 +63,177 @@ const S = {
   month: todayWall().slice(0, 7),
   day: todayWall(),
   loadedAt: 0,
+  get relative() { return !this.editor; },
 };
-const isEditor = () => !!S.token && !S.relative;
+const isEditor = () => S.editor;
 const app = $('#app');
+let cloud = null;
+let unsubs = [];
 
-/* ---------- GitHub ---------- */
-const ghHeaders = () => ({ Accept: 'application/vnd.github+json', ...(S.token ? { Authorization: 'Bearer ' + S.token } : {}) });
+/* ---------- data (Firebase) ---------- */
+const readRaw = async (path) => {
+  const r = await fetch(RAW + path + '?t=' + Date.now(), { cache: 'no-store' });
+  return r.ok ? r.text() : null;
+};
+const withShared = (e, cals) => {
+  if (e.cal === 'friends') return { ...e, shared: true };
+  const c = cals.find((x) => x.id === e.cal);
+  return { ...e, shared: !!(c ? isShared(c) : false) && !e.private };
+};
 
-async function readFile(path, { api = !!S.token } = {}) {
-  if (api) {
-    const r = await fetch(`${GH}/contents/${path}?ref=${CONFIG.branch}&t=${Date.now()}`, { headers: ghHeaders(), cache: 'no-store' });
-    if (r.status === 404) return { text: null };
-    if (r.status === 401) throw new Error('Your GitHub token was rejected. Update it in Settings.');
-    if (!r.ok) throw new Error('GitHub error ' + r.status);
-    const j = await r.json();
-    if (j.content) return { text: unb64utf8(j.content), sha: j.sha };
-    const r2 = await fetch(j.download_url, { cache: 'no-store' });
-    return { text: await r2.text(), sha: j.sha };
-  }
-  const r = await fetch(`https://raw.githubusercontent.com/${CONFIG.owner}/${CONFIG.repo}/${CONFIG.branch}/${path}?t=${Date.now()}`, { cache: 'no-store' });
-  if (r.status === 404) return { text: null };
-  if (!r.ok) throw new Error('Could not load the calendar (' + r.status + ')');
-  return { text: await r.text() };
+/** Apply a change to the calendar and save only what changed. */
+async function saveCal(mutate) {
+  if (!isEditor()) throw new Error('Sign in with Google to make changes.');
+  const before = S.cal;
+  const d = JSON.parse(JSON.stringify({ title: before.title, calendars: before.calendars, events: before.events, editors: before.editors || [] }));
+  mutate(d);
+  const spaceChanged = JSON.stringify([d.title, d.calendars, d.editors]) !== JSON.stringify([before.title, before.calendars, before.editors || []]);
+  if (spaceChanged) await cloud.updateSpace(S.space, { title: d.title, calendars: d.calendars, editors: d.editors });
+  const old = new Map(before.events.map((e) => [e.id, JSON.stringify(e)]));
+  const puts = d.events.map((e) => withShared(e, d.calendars)).filter((e) => old.get(e.id) !== JSON.stringify(e));
+  const keep = new Set(d.events.map((e) => e.id));
+  const dels = before.events.filter((e) => !keep.has(e.id)).map((e) => e.id);
+  await cloud.writeEvents(S.space, puts, dels);
+  S.cal = { ...S.cal, ...d, events: d.events.map((e) => withShared(e, d.calendars)) };
+  renderMain();
+  return S.cal;
 }
-
-async function writeFile(path, text, sha, message) {
-  const r = await fetch(`${GH}/contents/${path}`, {
-    method: 'PUT',
-    headers: { ...ghHeaders(), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, content: b64utf8(text), branch: CONFIG.branch, ...(sha ? { sha } : {}) }),
-  });
-  if (!r.ok) {
-    const j = await r.json().catch(() => ({}));
-    const e = new Error(j.message || 'GitHub error ' + r.status);
-    e.status = r.status;
-    throw e;
-  }
-  return (await r.json()).content.sha;
-}
-
-/** Re-read the latest calendar, apply a change, and save — so two editors never overwrite each other. */
-async function saveCal(mutate, message) {
-  if (!isEditor()) throw new Error('Add your GitHub token in Settings to make changes.');
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const cur = await readFile(CAL_FILE, { api: true });
-    const data = cur.text ? await decryptJSON(cur.text, S.pass) : emptyCal();
-    mutate(data);
-    data.updated = new Date().toISOString();
-    try {
-      const text = await encryptJSON(data, S.pass, cur.text ? saltOf(cur.text) : S.calSalt);
-      await writeFile(CAL_FILE, text, cur.sha, message);
-      S.cal = data;
-      S.calSalt = saltOf(text);
-      renderMain();
-      return data;
-    } catch (e) {
-      if (e.status === 409 || e.status === 422) continue;
-      throw e;
-    }
-  }
-  throw new Error('Someone else is saving right now — try again.');
-}
-
-const emptyCal = () => ({ v: 2, title: 'Ahlersmeyer Family Calendar', calendars: DEFAULT_CALENDARS.map((c) => ({ ...c })), events: [], updated: new Date().toISOString() });
 
 async function loadFeeds() {
   try {
-    const f = await readFile(S.relative ? FEEDS_SHARED_FILE : FEEDS_FILE, { api: false });
-    S.feeds = f.text ? await decryptJSON(f.text, S.pass) : { events: [], status: {} };
+    const t = await readRaw('data/feeds-space.enc');
+    S.feeds = t ? await decryptJSON(t, S.space) : { events: [], status: {} };
   } catch { S.feeds = { events: [], status: {} }; }
 }
+async function loadInbox() {}
 
-/* Add the Church calendar and sharing flags to calendars made before they existed. */
-async function migrate() {
-  if (S.cal.v >= 2) return;
-  try {
-    await saveCal((d) => {
-      for (const c of d.calendars) c.shared = isShared(c);
-      if (!d.calendars.some((c) => c.id === 'church')) d.calendars.push({ ...DEFAULT_CALENDARS.find((c) => c.id === 'church') });
-      d.v = 2;
-    }, 'Add sharing settings');
-  } catch {}
-}
-
-/* ---------- boot / lock / setup ---------- */
+/* ---------- boot / sign-in ---------- */
 async function boot() {
-  const pass = store.get('pass');
-  if (pass) return unlock(pass, true);
-  try {
-    const f = await readFile(CAL_FILE);
-    f.text ? renderLock() : renderSetup();
-  } catch (e) { renderLock(e.message); }
+  const m = location.hash.match(/[#&]s=([\w-]{16,})/);
+  if (m) { S.space = m[1]; store.set('space', m[1]); } // kept in the URL so a Home Screen icon opens straight to the calendar
+  try { cloud = await initCloud(); } catch { return renderLanding('Couldn’t load. Check your internet connection and reload.'); }
+  cloud.onUser(onUser);
 }
 
-async function unlock(pass, remember) {
-  app.innerHTML = `<div class="center muted">Loading…</div>`;
-  let file;
-  try { file = await readFile(CAL_FILE); } catch (e) { return renderLock(e.message); }
-  if (!file.text) return renderSetup();
-  S.relative = false;
-  try {
-    S.cal = await decryptJSON(file.text, pass);
-    S.calSalt = saltOf(file.text);
-  } catch {
-    // Not the family passcode — maybe the extended-family one.
-    let shared = null;
-    try { const sf = await readFile(SHARED_FILE, { api: false }); if (sf.text) shared = await decryptJSON(sf.text, pass); } catch {}
-    if (!shared) {
-      store.set('pass', null);
-      return renderLock('That passcode didn’t work.');
-    }
-    S.cal = shared;
-    S.relative = true;
+async function onUser(u) {
+  S.user = u;
+  S.editor = false;
+  if (u) {
+    let space = null;
+    try { space = await cloud.editorSpace(u.email); } catch {}
+    if (space) { S.editor = true; S.space = space; store.set('space', space); return start(); }
+    if (OWNERS.includes(u.email)) return renderMigrate();
+    if (!S.space) return renderLanding(`${esc(u.email)} isn’t set up to edit this calendar yet. Ask Sam to add it in Settings → Editors.`);
+    toast('This Google account can view but not edit — ask Sam to add you as an editor', 5000);
   }
-  S.pass = pass;
-  if (remember) store.set('pass', pass);
+  if (S.space) return start();
+  renderLanding();
+}
+
+function renderLanding(msg = '') {
+  unsubs.forEach((f) => f()); unsubs = [];
+  app.innerHTML = `
+  <div class="center"><div class="card">
+    <h1>Family Calendar</h1>
+    ${msg ? `<p class="help bad">${msg}</p>` : ''}
+    <form id="codeForm">
+      <label class="f">Family code</label>
+      <input class="in" id="code" autocomplete="off" autocapitalize="words" placeholder="From Sam or Emily’s text">
+      <div class="actions"><button class="btn primary big">Open the calendar</button></div>
+    </form>
+    <p class="help" style="margin-top:22px">Sam &amp; Emily: <a href="#" id="gsi">sign in with Google</a>.</p>
+  </div></div>`;
+  $('#gsi').onclick = (e) => { e.preventDefault(); cloud.signIn().catch((er) => toast(er.message, 6000)); };
+  $('#codeForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const code = $('#code').value.trim();
+    if (!code) return;
+    const sp = await cloud.lookupCode(code).catch(() => null);
+    if (!sp) return toast('That code didn’t work — check the spelling', 4000);
+    S.space = sp; store.set('space', sp);
+    history.replaceState(null, '', location.pathname + '#s=' + sp); // so Add to Home Screen keeps it
+    start();
+  };
+}
+
+async function start() {
+  unsubs.forEach((f) => f()); unsubs = [];
+  app.innerHTML = `<div class="center muted">Loading…</div>`;
+  const sp = await cloud.getSpace(S.space).catch(() => null);
+  if (!sp) { store.set('space', null); S.space = null; return renderLanding('That calendar link didn’t work. Ask Sam or Emily for a new one.'); }
+  S.cal = { title: sp.title, calendars: sp.calendars || [], editors: sp.editors || [], familyCode: sp.familyCode, codeSet: sp.codeSet, events: [] };
+  let first = true;
+  const paint = () => { if ($('#modal').classList.contains('hidden')) renderMain(); else S.dirty = true; };
+  unsubs.push(cloud.watchSpace(S.space, (d) => { if (!d) return; Object.assign(S.cal, { title: d.title, calendars: d.calendars || [], editors: d.editors || [], familyCode: d.familyCode, codeSet: d.codeSet }); if (!first) paint(); }));
+  await new Promise((res) => {
+    unsubs.push(cloud.watchEvents(S.space, !S.editor, (docs) => {
+      S.cal.events = docs;
+      if (first) { first = false; res(); } else paint();
+    }, (err) => { toast('Couldn’t load events: ' + (err.code || err.message), 6000); res(); }));
+  });
   await loadFeeds();
-  await loadInbox();
-  await claimEditorLink();
-  if (isEditor()) migrate();
   S.loadedAt = Date.now();
   renderMain();
 }
 
-function renderLock(error = '') {
-  app.innerHTML = `
-  <div class="center"><form class="card" id="lock">
-    <h1>Family Calendar</h1>
-    <p class="help">Enter the family passcode to see the calendar.</p>
-    <input class="in" id="pass" type="password" autocomplete="current-password" placeholder="Passcode" autofocus>
-    ${error ? `<p class="bad help">${esc(error)}</p>` : ''}
-    <label class="check"><input type="checkbox" id="rem" checked> Remember on this device</label>
-    <div class="actions"><button class="btn primary">Open calendar</button></div>
-  </form></div>`;
-  $('#lock').onsubmit = (e) => {
-    e.preventDefault();
-    const p = $('#pass').value.trim();
-    if (p) unlock(p, $('#rem').checked);
-  };
+function openSignIn() {
+  const sh = openModal(`
+    <div class="head"><div><h2>Sam or Emily?</h2><p class="help">Sign in with Google to add events, scan your email and import schedules.</p></div>
+      <button class="btn icon ghost" data-close aria-label="Close">✕</button></div>
+    <div class="actions stack"><button class="btn primary big" id="gsi2">Sign in with Google</button></div>
+    <p class="help">Everyone else: you can already see everything here${S.relative ? ' and add family events with + Add' : ''}.</p>`);
+  $('[data-close]', sh).onclick = closeModal;
+  $('#gsi2').onclick = () => { closeModal(); cloud.signIn().catch((e) => toast(e.message, 6000)); };
 }
 
-function renderSetup() {
+/* One-time move from the old GitHub-stored calendar into Firebase. */
+function renderMigrate() {
   app.innerHTML = `
-  <div class="center"><form class="card" id="setup">
-    <h1>Set up the calendar</h1>
-    <p class="help">First-time setup for <code>${esc(CONFIG.owner)}/${esc(CONFIG.repo)}</code>. Pick a passcode the family will use to open the calendar — everything is encrypted with it.</p>
-    <label class="f">Family passcode</label>
-    <input class="in" id="p1" type="password" autocomplete="new-password" minlength="6" required>
-    <label class="f">Type it again</label>
-    <input class="in" id="p2" type="password" autocomplete="new-password" required>
-    <label class="f">GitHub token (editors only)</label>
-    <input class="in" id="tok" type="password" value="${esc(S.token || '')}" placeholder="github_pat_…" required>
-    <p class="help">Make one at <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">GitHub → Fine-grained tokens</a>: only this repository, with <b>Contents</b>, <b>Actions</b>, and <b>Workflows</b> set to Read and write.</p>
+  <div class="center"><form class="card" id="mig">
+    <h1>Move your calendar over</h1>
+    <p class="help">One time only. Type your old family passcode and everything — events, attachments, calendars — moves into your Google-protected calendar. After this there are no passcodes or tokens.</p>
+    <label class="f">Old family passcode</label>
+    <input class="in" id="oldPass" type="password" required autocomplete="current-password">
+    <label class="f">Emily’s Gmail (she’ll be an editor too)</label>
+    <input class="in" id="emily" type="email" value="erahlersmeyer@gmail.com">
     <p class="bad help" id="err"></p>
-    <div class="actions"><button class="btn primary">Create calendar</button></div>
+    <div class="actions"><button class="btn primary big">Move it over</button></div>
   </form></div>`;
-  $('#setup').onsubmit = async (e) => {
-    e.preventDefault();
-    const p1 = $('#p1').value.trim(), p2 = $('#p2').value.trim(), tok = $('#tok').value.trim();
-    if (p1.length < 6) return ($('#err').textContent = 'Use at least 6 characters.');
-    if (p1 !== p2) return ($('#err').textContent = 'The passcodes don’t match.');
-    const btn = $('#setup button');
-    btn.disabled = true; btn.textContent = 'Setting up…';
-    S.token = tok; store.set('token', tok);
-    S.pass = p1;
+  $('#mig').onsubmit = async (ev) => {
+    ev.preventDefault();
+    const btn = $('#mig button'); btn.disabled = true; btn.textContent = 'Moving…';
     try {
-      const data = emptyCal();
-      const text = await encryptJSON(data, p1);
-      await writeFile(CAL_FILE, text, null, 'Create family calendar');
-      S.cal = data; S.calSalt = saltOf(text);
-      let wfOk = true;
-      try {
-        const cur = await readFile(WORKFLOW_PATH, { api: true });
-        if (cur.text !== WORKFLOW_YML) await writeFile(WORKFLOW_PATH, WORKFLOW_YML, cur.sha, 'Add team feed sync');
-      } catch { wfOk = false; }
-      store.set('pass', p1);
-      renderSetupDone(wfOk);
-    } catch (err) {
-      btn.disabled = false; btn.textContent = 'Create calendar';
-      $('#err').textContent = err.message;
-    }
+      const raw = await readRaw('data/calendar.enc');
+      if (!raw) throw new Error('Couldn’t find the old calendar.');
+      let old;
+      try { old = await decryptJSON(raw, $('#oldPass').value.trim()); } catch { throw new Error('That passcode didn’t work.'); }
+      const space = old.spaceId || [...crypto.getRandomValues(new Uint8Array(18))].map((b) => 'abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 57]).join('');
+      const editors = [...new Set([S.user.email, ...OWNERS.filter((e) => e === S.user.email), $('#emily').value.trim().toLowerCase()].filter(Boolean))];
+      const calendars = old.calendars.map((c) => ({ ...c, shared: isShared(c) }));
+      let events = old.events.slice();
+      // relatives' events from the old inbox repo, if any
+      if (old.inbox?.token && old.relativesPass) {
+        try {
+          const r = await fetch(`https://api.github.com/repos/${old.inbox.repo}/contents/inbox.enc`, { headers: { Authorization: 'Bearer ' + old.inbox.token, Accept: 'application/vnd.github+json' } });
+          if (r.ok) { const j = await r.json(); const ib = await decryptJSON(decodeURIComponent(escape(atob(j.content.replace(/\s/g, '')))), old.relativesPass); events.push(...(ib.events || []).map((e) => ({ ...e, cal: 'friends' }))); }
+        } catch {}
+      }
+      btn.textContent = `Moving ${events.length} events…`;
+      await cloud.createSpace(space, { title: old.title || 'Family Calendar', owner: S.user.email, editors, calendars, createdAt: Date.now() });
+      for (const e of editors) await cloud.setEditor(e, space);
+      try { await cloud.setCode(old.relativesPass || 'Ahlersmeyer', space); await cloud.updateSpace(space, { familyCode: old.relativesPass || 'Ahlersmeyer', codeSet: true }); } catch {}
+      await cloud.writeEvents(space, events.map((e) => withShared(e, calendars)));
+      S.space = space; S.editor = true; store.set('space', space);
+      await start();
+      toast(`Moved ${events.length} events ✓`, 4000);
+    } catch (err) { btn.disabled = false; btn.textContent = 'Move it over'; $('#err').textContent = err.message; }
   };
-}
-
-function renderSetupDone(wfOk) {
-  app.innerHTML = `
-  <div class="center"><div class="card">
-    <h1>Calendar created 🎉</h1>
-    <p class="help">One more step so team schedules (GameChanger, SportsYou) can sync automatically:</p>
-    <ol class="steps">
-      ${wfOk ? '' : `<li>Your token couldn’t add the sync workflow. Give it <b>Workflows: Read and write</b>, then reopen Settings → Sync now.</li>`}
-      <li>Open <a href="https://github.com/${esc(CONFIG.owner)}/${esc(CONFIG.repo)}/settings/secrets/actions/new" target="_blank" rel="noopener">repository secrets</a>.</li>
-      <li>Name: <code>CAL_PASSCODE</code></li>
-      <li>Secret: the family passcode you just chose.</li>
-    </ol>
-    <div class="actions"><button class="btn primary" id="go">Open the calendar</button></div>
-  </div></div>`;
-  $('#go').onclick = () => renderMain();
 }
 
 /* ---------- events ---------- */
 const FRIENDS = { id: 'friends', name: 'Family & Friends', color: '#0891b2', shared: true };
 const calById = (id) => S.cal.calendars.find((c) => c.id === id) || (id === 'friends' ? FRIENDS : { id, name: 'Other', color: '#94a3b8' });
-const visibleCalendars = () => [...S.cal.calendars, ...(familyAddOn() ? [FRIENDS] : [])];
+const visibleCalendars = () => [...(isEditor() ? S.cal.calendars : S.cal.calendars.filter(isShared)), FRIENDS];
 
 function isLight(hex) {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
@@ -395,7 +339,7 @@ function evRow(e) {
 
 /* ---------- main screen ---------- */
 function renderMain() {
-  const family = !S.relative; // you and Emily (with or without this phone set up yet)
+  const family = isEditor();
   const canAdd = isEditor() || canFamilyAdd();
   const day = () => (S.view === 'month' ? S.day : todayWall());
   app.innerHTML = `
@@ -412,7 +356,7 @@ function renderMain() {
   <main id="view"></main>
   <nav class="tabbar" aria-label="Menu">
     <button data-tab="cal"><span>📅</span>Calendar</button>
-    ${family || canAdd ? `<button data-tab="add" class="addtab"><span>＋</span>Add</button>` : ''}
+    <button data-tab="add" class="addtab"><span>＋</span>Add</button>
     ${family ? `<button data-tab="email"><span>✉️</span>Email</button><button data-tab="import"><span>📄</span>Import</button>` : ''}
     <button data-tab="settings"><span>⚙️</span>Settings</button>
   </nav>`;
@@ -424,57 +368,16 @@ function renderMain() {
     renderMain();
   }));
   if ($('#welcomeX')) $('#welcomeX').onclick = () => { store.set(S.relative ? 'welcomedRel' : 'welcomedEd', '1'); renderMain(); };
-  const needEditor = (fn) => () => (isEditor() ? fn() : openUnlockEditor(fn));
+  const needEditor = (fn) => () => (isEditor() ? fn() : openSignIn());
   const actions = {
     cal: () => { if (S.view !== 'list') { S.view = 'list'; store.set('view', 'list'); renderMain(); } scrollTo({ top: 0, behavior: 'smooth' }); },
-    add: () => (S.relative ? openFamilyAdd(day()) : needEditor(() => openEdit(null, day()))()),
+    add: () => (isEditor() ? openEdit(null, day()) : openFamilyAdd(day())),
     email: needEditor(() => openImport(null, 'email')),
     import: needEditor(() => openImport()),
     settings: openSettings,
   };
   $$('[data-tab]', $('.tabbar')).forEach((b) => (b.onclick = () => actions[b.dataset.tab]()));
   S.view === 'month' ? renderMonth() : renderList();
-}
-
-/* ---------- editor setup on a new phone ---------- */
-function openUnlockEditor(then) {
-  const sh = openModal(`
-    <div class="head"><div><h2>Set up this phone</h2><p class="help">One time per phone. After this you can add events, scan email and import schedules here.</p></div>
-      <button class="btn icon ghost" data-close aria-label="Close">✕</button></div>
-    <div class="steps-card">
-      <b>Easiest:</b> on a phone or computer that’s already set up, open <b>⚙️ Settings → Set up another phone</b>, then scan the QR code with this phone’s camera (or open the link it gives you).
-    </div>
-    <label class="f">Or paste the GitHub token</label>
-    <input class="in" id="unTok" type="password" placeholder="github_pat_…" autocomplete="off">
-    <div class="actions"><button class="btn primary big" id="unGo">Set up this phone</button></div>`);
-  $('[data-close]', sh).onclick = closeModal;
-  $('#unGo').onclick = async () => {
-    const t = $('#unTok').value.trim();
-    if (!/^(github_pat_|ghp_)/.test(t)) return toast('That doesn’t look like a GitHub token', 4000);
-    if (!(await checkToken(t))) return toast('That token didn’t work for this calendar', 5000);
-    S.token = t; store.set('token', t); closeModal(); renderMain(); toast('This phone is set up ✓');
-    if (then) then();
-  };
-}
-async function checkToken(t) {
-  try {
-    const r = await fetch(GH, { headers: { Authorization: 'Bearer ' + t, Accept: 'application/vnd.github+json' } });
-    return r.ok && (await r.json()).permissions?.push;
-  } catch { return false; }
-}
-/** A link that sets up another phone: the token travels encrypted with the family passcode. */
-async function editorLink() {
-  const blob = await encryptJSON({ t: S.token }, S.pass);
-  return location.origin + location.pathname + '#editor=' + encodeURIComponent(btoa(blob));
-}
-async function claimEditorLink() {
-  const m = location.hash.match(/editor=([^&]+)/);
-  if (!m || S.relative || !S.pass) return;
-  history.replaceState(null, '', location.pathname + location.search);
-  try {
-    const { t } = await decryptJSON(atob(decodeURIComponent(m[1])), S.pass);
-    if (t && (await checkToken(t))) { S.token = t; store.set('token', t); renderMain(); toast('This phone is set up to add and edit ✓', 4000); }
-  } catch { toast('That setup link didn’t match this calendar’s passcode', 5000); }
 }
 
 function welcomeBanner() {
@@ -607,7 +510,7 @@ function openDetail(id) {
   const fromFamily = e.cal === 'friends';
   const mine = fromFamily && JSON.parse(store.get('myAdds') || '[]').includes(e.id);
   const canEdit = isEditor() && !fromFeed && !fromFamily;
-  const canDelete = canEdit || (fromFamily && (isEditor() || mine));
+  const canDelete = canEdit || (fromFamily && isEditor());
   const sh = openModal(`
     <div class="head"><div><h2>${esc(e.title)}</h2>${whoChip(c)}</div>
       <button class="btn icon ghost" data-close aria-label="Close">✕</button></div>
@@ -654,72 +557,38 @@ const loadQR = () => (qrReady ||= new Promise((res, rej) => {
 }));
 
 /* ---------- attachments ---------- */
-const ATT_MAX = 15 * 1024 * 1024;
+const ATT_MAX = 5 * 1024 * 1024;
 async function uploadAttachment(file) {
-  if (file.size > ATT_MAX) throw new Error(`${file.name} is too big (15 MB max)`);
-  const { data, key } = await encryptBytes(new Uint8Array(await file.arrayBuffer()));
-  const path = `attachments/${newId()}.bin`;
-  const r = await fetch(`${GH}/contents/${path}`, {
-    method: 'PUT', headers: { ...ghHeaders(), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message: `Attach ${file.name}`, content: bytesToB64(data), branch: CONFIG.branch }),
-  });
-  if (!r.ok) throw new Error(`Couldn’t upload ${file.name} (${r.status})`);
-  return { name: file.name.replace(/\.[^.]+$/, ''), path, key, type: file.type || 'application/pdf' };
+  if (file.size > ATT_MAX) throw new Error(`${file.name} is too big (5 MB max)`);
+  const id = newId();
+  await cloud.putFile(S.space, id, { name: file.name, type: file.type || 'application/pdf', size: file.size }, bytesToB64(new Uint8Array(await file.arrayBuffer())));
+  return { name: file.name.replace(/\.[^.]+$/, ''), path: 'fs:' + id, type: file.type || 'application/pdf' };
 }
 async function openAttachment(a) {
   const win = window.open('', '_blank'); // open now so phones don't block it
   try {
     if (win) win.document.write('<p style="font:16px system-ui;padding:20px">Opening…</p>');
-    const r = await fetch(`https://raw.githubusercontent.com/${CONFIG.owner}/${CONFIG.repo}/${CONFIG.branch}/${a.path}`, { cache: 'force-cache' });
-    if (!r.ok) throw new Error('Couldn’t load the file (' + r.status + ')');
-    const bytes = await decryptBytes(await r.arrayBuffer(), a.key);
+    let bytes;
+    if (a.path.startsWith('fs:')) bytes = Uint8Array.from(atob(await cloud.getFile(S.space, a.path.slice(3))), (c) => c.charCodeAt(0));
+    else {
+      const r = await fetch(RAW + a.path, { cache: 'force-cache' });
+      if (!r.ok) throw new Error('Couldn’t load the file (' + r.status + ')');
+      bytes = await decryptBytes(await r.arrayBuffer(), a.key);
+    }
     const url = URL.createObjectURL(new Blob([bytes], { type: a.type }));
     if (win) win.location.href = url; else location.href = url;
   } catch (err) { if (win) win.close(); toast(err.message, 5000); }
 }
 
-/* ---------- extended family can add events (separate "inbox" repo) ---------- */
-// The inbox is a small second GitHub repo that only holds relatives' events, encrypted
-// with the extended-family passcode. Its token can only touch that repo.
-const inboxCfg = () => S.cal.inbox || null;
-const inboxKey = () => S.relative ? S.pass : S.cal.relativesPass;
-const familyAddOn = () => !!(inboxCfg()?.repo && inboxCfg()?.token && inboxKey());
-const canFamilyAdd = () => S.relative && familyAddOn();
-
-async function inboxReq(method, body) {
-  const { repo, token } = inboxCfg();
-  const r = await fetch(`https://api.github.com/repos/${repo}/contents/inbox.enc${method === 'GET' ? `?t=${Date.now()}` : ''}`, {
-    method, cache: 'no-store',
-    headers: { Accept: 'application/vnd.github+json', Authorization: 'Bearer ' + token, ...(body ? { 'Content-Type': 'application/json' } : {}) },
-    ...(body ? { body: JSON.stringify(body) } : {}),
-  });
-  return r;
-}
-async function loadInbox() {
-  S.inbox = { events: [] };
-  if (!familyAddOn()) return;
-  try {
-    const r = await inboxReq('GET');
-    if (r.status === 404) return;
-    if (!r.ok) return;
-    const j = await r.json();
-    const data = await decryptJSON(unb64utf8(j.content), inboxKey());
-    S.inbox = { events: (data.events || []).map((e) => ({ ...e, cal: 'friends' })), sha: j.sha };
-  } catch { S.inbox = { events: [] }; }
-}
+/* ---------- relatives add events (Family & Friends) ---------- */
+const familyAddOn = () => !!S.space;
+const canFamilyAdd = () => !isEditor() && !!S.space;
 async function saveInbox(mutate) {
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const r = await inboxReq('GET');
-    let data = { events: [] }, sha;
-    if (r.ok) { const j = await r.json(); sha = j.sha; data = await decryptJSON(unb64utf8(j.content), inboxKey()); }
-    else if (r.status !== 404) throw new Error('Couldn’t reach the family calendar (' + r.status + ')');
-    mutate(data);
-    const w = await inboxReq('PUT', { message: 'Family event update', content: b64utf8(await encryptJSON(data, inboxKey())), ...(sha ? { sha } : {}) });
-    if (w.ok) { S.inbox = { events: data.events.map((e) => ({ ...e, cal: 'friends' })) }; renderMain(); return; }
-    if (w.status === 409 || w.status === 422) continue;
-    throw new Error('Couldn’t save (' + w.status + ')');
-  }
-  throw new Error('Someone else is saving right now — try again.');
+  await saveCal((d) => {
+    const fr = { events: d.events.filter((e) => e.cal === 'friends') };
+    mutate(fr);
+    d.events = [...d.events.filter((e) => e.cal !== 'friends'), ...fr.events.map((e) => ({ ...e, cal: 'friends' }))];
+  });
 }
 
 function openFamilyAdd(day) {
@@ -748,7 +617,7 @@ function openFamilyAdd(day) {
     const btn = $('button.primary', f);
     btn.disabled = true; btn.textContent = 'Adding…';
     try {
-      await saveInbox((d) => { d.events = [...(d.events || []), e]; });
+      await cloud.addFamilyEvent(S.space, { ...e, cal: 'friends', shared: true, createdAt: Date.now() });
       store.set('myAdds', JSON.stringify([...JSON.parse(store.get('myAdds') || '[]'), e.id].slice(-300)));
       closeModal(); toast('Added — thanks!');
     } catch (err) { btn.disabled = false; btn.textContent = 'Add to calendar'; toast(err.message, 5000); }
@@ -1014,6 +883,7 @@ function startEmailScan() {
   if (!g) { loadGIS().catch((e) => toast(e.message, 5000)); return toast('Loading Google sign-in — tap again in a second'); }
   const client = g.initTokenClient({
     client_id: googleClientId(),
+    hint: S.user?.email,
     scope: GMAIL_SCOPE,
     callback: (r) => (r.error ? toast(r.error_description || 'Google sign-in failed', 5000) : runEmailScan(r.access_token)),
     error_callback: (e) => toast(e.type === 'popup_closed' ? 'Sign-in was closed' : 'Google sign-in failed — check the Client ID setup', 5000),
@@ -1086,7 +956,9 @@ async function extractMail(m, token) {
   if (!items.length && !mail.junk) {
     const today = todayWall(), keys = new Set();
     const cleanSubject = subject.replace(/^((re|fwd?|fw):\s*)+/i, '').slice(0, 70);
-    for (const r of mergeRows(parseScheduleText(splitSentences(cleanSubject + '\n' + body)))) {
+    const sent = h.date ? new Date(h.date) : null;
+    const base = sent && !isNaN(sent) ? utcToWall(sent).slice(0, 10) : undefined;
+    for (const r of mergeRows(parseScheduleText(splitSentences(cleanSubject + '\n' + body), { base }))) {
       if (r.date < today || r.date > addDays(today, 400)) continue;
       const score = scoreRow(r, mail);
       if (score < KEEP_SCORE) continue;
@@ -1222,197 +1094,162 @@ addEventListener('drop', (e) => {
 function feedStatus(c) {
   if (!c.feedUrl) return '';
   const st = S.feeds.status?.[c.id];
-  if (!st) return `<span class="st muted">Waiting for first sync…</span>`;
-  return st.ok ? `<span class="st ok">✓ ${st.count} events · synced ${new Date(st.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>`
+  if (!st) return `<span class="st muted">Team link saved — first sync within 30 minutes</span>`;
+  return st.ok ? `<span class="st ok">✓ ${st.count} events from the team app · synced ${new Date(st.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>`
     : `<span class="st bad">⚠ ${esc(st.error)} — check the link</span>`;
 }
 
 function calRow(c) {
+  const ed = isEditor();
   return `<div class="calrow" data-id="${esc(c.id)}">
-    <input type="color" value="${esc(c.color)}" ${isEditor() ? '' : 'disabled'} aria-label="Color">
-    <input class="in name" value="${esc(c.name)}" placeholder="Calendar name" ${isEditor() ? '' : 'disabled'}>
-    ${isEditor() ? `<button class="btn icon ghost del" aria-label="Remove">✕</button>` : '<span></span>'}
-    ${isEditor() ? `<input class="in feed" value="${esc(c.feedUrl || '')}" placeholder="Team calendar link (GameChanger, SportsYou…) — optional">
+    <input type="color" value="${esc(c.color)}" ${ed ? '' : 'disabled'} aria-label="Color">
+    <input class="in name" value="${esc(c.name)}" placeholder="Calendar name" ${ed ? '' : 'disabled'}>
+    ${ed ? `<button class="btn icon ghost del" aria-label="Remove">✕</button>` : '<span></span>'}
+    ${ed ? `<input class="in feed" value="${esc(c.feedUrl || '')}" placeholder="Team calendar link (GameChanger, SportsYou…) — optional">
       <label class="check share"><input type="checkbox" class="shared" ${isShared(c) ? 'checked' : ''}> Extended family can see</label>` : ''}
-    ${feedStatus(c)}
+    ${ed ? feedStatus(c) : ''}
   </div>`;
 }
 
+const familyLink = () => `https://${CONFIG.owner}.github.io/${CONFIG.repo}/#s=${S.space}`;
+
 function openSettings() {
-  const url = location.origin + location.pathname;
+  const ed = isEditor();
   const sh = openModal(`
-    <div class="head"><div><h2>Settings</h2></div><button class="btn icon ghost" data-close aria-label="Close">✕</button></div>
+    <div class="head"><div><h2>Settings</h2>${S.user ? `<p class="help">Signed in as ${esc(S.user.email)}${ed ? ' · editor' : ''}</p>` : ''}</div><button class="btn icon ghost" data-close aria-label="Close">✕</button></div>
+
+    ${ed ? `<h4>Invite family</h4>
+    <p class="help">Copies a ready-to-send text with the link, the family code and how to add it to their Home Screen. They see sports, school and church (not the Family calendar or anything 🔒), and can add their own events.</p>
+    <div class="actions stack"><button class="btn primary big" id="copyInvite">📋 Copy invite message</button></div>
+    <label class="f">Family code</label>
+    <div class="two"><input class="in" id="famCode" value="${esc(S.cal.familyCode || 'Ahlersmeyer')}" autocomplete="off"><button class="btn" id="saveCode">Save code</button></div>
+    <details class="help"><summary>Show QR code / link only</summary><div id="qr" class="qr"></div><div class="actions"><button class="btn" id="copyFamily">Copy link only</button></div></details>
+
+    <h4>Editors</h4>
+    <p class="help">These Google accounts can add, change and delete anything, and scan their email.</p>
+    <div id="eds">${(S.cal.editors || []).map((e) => `<div class="att"><span>${esc(e)}</span>${OWNERS.includes(e) ? '<span class="muted">owner</span>' : `<button class="btn icon ghost" data-rmed="${esc(e)}" aria-label="Remove">✕</button>`}</div>`).join('')}</div>
+    <div class="two"><input class="in" id="newEd" type="email" placeholder="name@gmail.com"><button class="btn" id="addEd">Add editor</button></div>
 
     <h4>Calendars</h4>
     <div id="cals">${S.cal.calendars.map(calRow).join('')}</div>
-    ${isEditor() ? `
-      <div class="actions"><button class="btn" id="addCal">+ Add calendar</button><button class="btn primary" id="saveCals">Save calendars</button></div>
-      <details class="help" style="margin-top:12px"><summary><b>Where do I find a team’s calendar link?</b></summary>
-        <p><b>GameChanger:</b> open the team → Schedule → the ⋯ / share icon → <i>Sync to Calendar</i> (or <i>Subscribe</i>) → copy the link.</p>
-        <p><b>SportsYou:</b> open the team → Calendar → ⋯ → <i>Sync Calendar</i> / <i>Subscribe</i> → copy the link.</p>
-        <p>Links starting with <code>webcal://</code> or ending in <code>.ics</code> both work. New games show up within about 2 hours, or tap Sync now.</p>
-      </details>
-      <div class="actions"><button class="btn" id="syncNow">Sync team feeds now</button></div>` : ''}
-
-    ${isEditor() ? `<h4>Set up another phone</h4>
-    <p class="help">For Emily (or your own phone): scan this with the phone’s camera, or send the link. They’ll enter the family passcode and that phone can add events and scan email.</p>
-    <div id="qr" class="qr"></div>
-    <div class="actions"><button class="btn" id="copySetup">Copy setup link</button></div>` : !S.relative ? `<h4>This phone</h4><p class="help">This phone can only view. <a href="#" id="unlockHere">Set it up to add events and scan email</a>.</p>` : ''}
+    <div class="actions"><button class="btn" id="addCal">+ Add calendar</button><button class="btn primary" id="saveCals">Save calendars</button></div>
+    <details class="help" style="margin-top:12px"><summary><b>Where do I find a team’s calendar link?</b></summary>
+      <p><b>GameChanger app:</b> team → Schedule → Sync to calendar → copy the link.</p>
+      <p><b>SportsYou:</b> Calendar → the calendar icon → Export/Subscribe → Copy URL.</p>
+      <p>Paste it on the calendar it belongs to and tap Save. Games show up within 30 minutes and stay up to date.</p>
+    </details>` : ''}
 
     <h4>Text size</h4>
     <div class="seg"><button data-size="" class="${!store.get('textSize') ? 'on' : ''}">Normal</button><button data-size="big" class="${store.get('textSize') === 'big' ? 'on' : ''}">Larger</button><button data-size="huge" class="${store.get('textSize') === 'huge' ? 'on' : ''}">Largest</button></div>
 
-    <h4>This device</h4>
-    ${S.relative ? '' : `<label class="f">GitHub token (only needed to add or change events)</label>
-    <input class="in" id="tok" type="password" value="${esc(S.token || '')}" placeholder="github_pat_…">`}
-    <div class="actions">${S.relative ? '' : `<button class="btn" id="saveTok">${S.token ? 'Update token' : 'Become an editor'}</button>
-      ${S.token ? `<button class="btn ghost" id="dropTok">Remove token</button>` : ''}`}
-      <button class="btn ghost danger" id="lockBtn">Lock this device</button></div>
-
-    ${isEditor() ? `<h4>Email scanning (you two only)</h4>
-    <p class="help">Lets each editor scan their own Gmail from their own phone. Needs a one-time Google setup — paste the <b>Client ID</b> here. Relatives never see this.</p>
-    <label class="f">Google OAuth Client ID</label>
-    <input class="in" id="gcid" autocomplete="off" value="${esc(googleClientId())}" placeholder="1234…apps.googleusercontent.com">
-    <div class="actions"><button class="btn" id="saveGcid">Save</button></div>` : ''}
-
-    ${isEditor() ? `<h4>Let relatives add events</h4>
-    ${familyAddOn() ? `<p class="help ok">✓ On — relatives see a <b>+ Add</b> button. Their events show on “Family & Friends”.</p>` : `<p class="help">Relatives can add their own events (birthdays, dinners, visits) with a simple form. One-time setup:</p>
-    <ol class="steps help">
-      <li>On GitHub, create a new <b>private</b> repository named <code>family-calendar-inbox</code> (check “Add a README”).</li>
-      <li>Create a fine-grained token for <b>only that repo</b> with <b>Contents: Read and write</b>.</li>
-      <li>Paste it below and save. (Set the extended family passcode first.)</li>
-    </ol>`}
-    <label class="f">Inbox repository</label>
-    <input class="in" id="inRepo" value="${esc(inboxCfg()?.repo || CONFIG.owner + '/family-calendar-inbox')}">
-    <label class="f">Inbox token</label>
-    <input class="in" id="inTok" type="password" value="${esc(inboxCfg()?.token || '')}" placeholder="github_pat_…">
-    <div class="actions"><button class="btn" id="saveInbox">Save</button></div>` : ''}
-
-    ${isEditor() ? `<h4>Extended family</h4>
-    <p class="help">Relatives get their own passcode and only see calendars marked “Extended family can see” (sports, church, etc.). Your Family calendar stays private. Updates reach them about a minute after you save.</p>
-    <label class="f">Extended family passcode</label>
-    <input class="in" id="relPass" type="text" autocomplete="off" value="${esc(S.cal.relativesPass || '')}" placeholder="Something different from yours">
-    <div class="actions"><button class="btn" id="saveRel">Save passcode</button><button class="btn" id="copyLink">Copy link</button></div>
-    <p class="help">Send relatives the link and this passcode. Everything is encrypted before it’s saved to GitHub.</p>` : `<div class="actions"><button class="btn" id="copyLink">Copy link</button></div>`}`);
+    <h4>${S.user ? 'Account' : 'Sam or Emily?'}</h4>
+    <div class="actions">${S.user ? `<button class="btn" id="signOut">Sign out</button>` : `<button class="btn primary" id="signIn">Sign in with Google</button>`}</div>`);
   $('[data-close]', sh).onclick = closeModal;
-
-  if (isEditor()) {
-    const wireRow = (row) => ($('.del', row).onclick = () => row.remove());
-    $$('.calrow', sh).forEach(wireRow);
-    $('#addCal').onclick = () => {
-      const div = document.createElement('div');
-      const palette = ['#0891b2', '#db2777', '#65a30d', '#ca8a04', '#4f46e5', '#0d9488'];
-      div.innerHTML = calRow({ id: '', name: '', shared: true, color: palette[S.cal.calendars.length % palette.length] });
-      const row = div.firstElementChild;
-      $('#cals').appendChild(row);
-      wireRow(row);
-      $('.name', row).focus();
-    };
-    $('#saveCals').onclick = async () => {
-      const used = new Set();
-      const cals = $$('.calrow', sh).map((row) => {
-        const name = $('.name', row).value.trim();
-        if (!name) return null;
-        let id = row.dataset.id || slug(name);
-        while (used.has(id)) id += '-2';
-        used.add(id);
-        const feedUrl = $('.feed', row).value.trim();
-        return { id, name, color: $('input[type=color]', row).value, shared: $('.shared', row).checked, ...(feedUrl ? { feedUrl } : {}) };
-      }).filter(Boolean);
-      const removed = S.cal.calendars.filter((c) => !cals.some((x) => x.id === c.id));
-      let dropEvents = false;
-      if (removed.length) {
-        const n = S.cal.events.filter((e) => removed.some((c) => c.id === e.cal)).length;
-        if (n) dropEvents = confirm(`Also delete the ${n} event${n === 1 ? '' : 's'} on ${removed.map((c) => c.name).join(', ')}?`);
-      }
-      const feedsChanged = JSON.stringify(cals.map((c) => c.feedUrl || '')) !== JSON.stringify(S.cal.calendars.map((c) => c.feedUrl || ''));
-      try {
-        await saveCal((d) => {
-          d.calendars = cals;
-          if (dropEvents) d.events = d.events.filter((e) => !removed.some((c) => c.id === e.cal));
-        }, 'Update calendars');
-        closeModal();
-        toast(feedsChanged ? 'Saved — team schedules will appear in a couple of minutes' : 'Saved', 4000);
-        if (feedsChanged) setTimeout(refresh, 120000);
-      } catch (err) { toast(err.message, 5000); }
-    };
-    $('#syncNow').onclick = async () => {
-      try {
-        const r = await fetch(`${GH}/actions/workflows/sync-feeds.yml/dispatches`, { method: 'POST', headers: { ...ghHeaders(), 'Content-Type': 'application/json' }, body: JSON.stringify({ ref: CONFIG.branch }) });
-        if (r.status === 404) {
-          const cur = await readFile(WORKFLOW_PATH, { api: true });
-          await writeFile(WORKFLOW_PATH, WORKFLOW_YML, cur.sha, 'Add team feed sync');
-          toast('Installed the sync — it runs in a minute', 4000);
-        } else if (!r.ok) throw new Error('Couldn’t start the sync (' + r.status + '). Your token needs Actions: Read and write.');
-        else toast('Syncing — new games appear in a minute or two', 4000);
-        setTimeout(refresh, 90000);
-      } catch (err) { toast(err.message, 6000); }
-    };
-  }
-  if ($('#saveGcid')) $('#saveGcid').onclick = async () => {
-    const v = $('#gcid').value.trim();
-    if (v && !/\.apps\.googleusercontent\.com$/.test(v)) return toast('That doesn’t look like a Client ID (ends in .apps.googleusercontent.com)', 5000);
-    try { await saveCal((d) => { if (v) d.googleClientId = v; else delete d.googleClientId; }, 'Update email scanning'); closeModal(); toast(v ? 'Email scanning is on — tap ✉︎ Scan email' : 'Email scanning turned off', 4000); }
-    catch (err) { toast(err.message, 5000); }
-  };
-  if ($('#unlockHere')) $('#unlockHere').onclick = (ev) => { ev.preventDefault(); openUnlockEditor(); };
-  if ($('#copySetup')) {
-    editorLink().then((link) => {
-      $('#copySetup').onclick = async () => { try { await navigator.clipboard.writeText(link); toast('Setup link copied — text it to Emily'); } catch { prompt('Copy this link:', link); } };
-      loadQR().then(() => { const el = $('#qr'); if (el && window.QRCode) new window.QRCode(el, { text: link, width: 180, height: 180, correctLevel: window.QRCode.CorrectLevel.L }); }).catch(() => {});
-    });
-  }
   $$('[data-size]', sh).forEach((b) => (b.onclick = () => { store.set('textSize', b.dataset.size || null); applyTextSize(); closeModal(); openSettings(); }));
-  if ($('#saveInbox')) $('#saveInbox').onclick = async () => {
-    const repo = $('#inRepo').value.trim().replace(/^https:\/\/github\.com\//, '').replace(/\.git$/, ''), token = $('#inTok').value.trim();
-    if (!S.cal.relativesPass) return toast('Set the extended family passcode first (just below)', 5000);
-    if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !token) return toast('Fill in the repository and token', 4000);
-    const btn = $('#saveInbox'); btn.disabled = true; btn.textContent = 'Checking…';
+  if ($('#signIn')) $('#signIn').onclick = () => { closeModal(); cloud.signIn().catch((e) => toast(e.message, 6000)); };
+  if ($('#signOut')) $('#signOut').onclick = async () => { closeModal(); await cloud.signOut(); toast('Signed out'); };
+  if (!ed) return;
+
+  const link = familyLink();
+  const inviteText = (code) => `You're invited to the ${S.cal.title || 'family calendar'}! 🗓
+
+Tap to open: ${link}
+If it ever asks for a family code, enter: ${code}
+
+Put it on your Home Screen so it's one tap away:
+• iPhone: open the link in Safari → tap the Share button (square with the arrow) → "Add to Home Screen" → Add
+• Android: open the link in Chrome → tap ⋮ (top right) → "Add to Home screen" → Add
+
+You'll see the kids' games, school and church events with times, places and directions. Have a birthday, dinner or visit coming up? Tap "+ Add" to put it on the calendar for everyone.
+
+— Sam & Emily`;
+  const ensureCode = async (code) => {
+    if (S.cal.familyCode === code && S.cal.codeSet) return;
+    await cloud.setCode(code, S.space);
+    await cloud.updateSpace(S.space, { familyCode: code, codeSet: true });
+    S.cal.familyCode = code; S.cal.codeSet = true;
+  };
+  $('#copyInvite').onclick = async () => {
+    const code = $('#famCode').value.trim() || 'Ahlersmeyer';
+    const text = inviteText(code);
+    try { await navigator.clipboard.writeText(text); toast('Invite copied — paste it in a text to family', 4000); } catch { prompt('Copy this invite:', text); }
+    ensureCode(code).catch((e) => toast('Couldn’t save the family code: ' + e.message, 5000));
+  };
+  $('#saveCode').onclick = async () => {
+    const code = $('#famCode').value.trim();
+    if (code.length < 4) return toast('Use at least 4 letters');
+    try { await ensureCode(code); toast(`Family code is now “${code}”`); } catch (e) { toast(e.message, 5000); }
+  };
+  $('#copyFamily').onclick = async () => { try { await navigator.clipboard.writeText(link); toast('Family link copied — paste it in a text'); } catch { prompt('Copy this link:', link); } };
+  loadQR().then(() => { const el = $('#qr'); if (el && window.QRCode) new window.QRCode(el, { text: link, width: 170, height: 170, correctLevel: window.QRCode.CorrectLevel.L }); }).catch(() => {});
+
+  $('#addEd').onclick = async () => {
+    const em = $('#newEd').value.trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/.test(em)) return toast('Enter their Google email address');
     try {
-      const r = await fetch(`https://api.github.com/repos/${repo}`, { headers: { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json' } });
-      if (!r.ok) throw new Error(r.status === 404 ? 'Can’t find that repository with this token' : 'Token was rejected (' + r.status + ')');
-      const j = await r.json();
-      if (!j.permissions?.push) throw new Error('This token can’t write to that repository — give it Contents: Read and write');
-      await saveCal((d) => { d.inbox = { repo, token }; }, 'Let relatives add events');
-      await loadInbox();
-      closeModal(); toast('Done — relatives can now add events', 4000);
-    } catch (err) { btn.disabled = false; btn.textContent = 'Save'; toast(err.message, 6000); }
+      await saveCal((d) => { d.editors = [...new Set([...(d.editors || []), em])]; });
+      await cloud.setEditor(em, S.space);
+      closeModal(); openSettings(); toast(`${em} can now sign in and edit`, 4000);
+    } catch (err) { toast(err.message, 5000); }
   };
-  if ($('#saveRel')) $('#saveRel').onclick = async () => {
-    const v = $('#relPass').value.trim();
-    if (v && v.length < 6) return toast('Use at least 6 characters');
-    if (v && v === S.pass) return toast('Use a different passcode than your own');
-    try { await saveCal((d) => { if (v) d.relativesPass = v; else delete d.relativesPass; }, 'Update extended family access'); closeModal(); toast(v ? 'Saved — relatives can open it in about a minute' : 'Extended family access turned off', 4000); }
+  $$('[data-rmed]', sh).forEach((b) => (b.onclick = async () => {
+    const em = b.dataset.rmed;
+    if (!confirm(`Remove ${em} as an editor?`)) return;
+    try { await saveCal((d) => { d.editors = (d.editors || []).filter((x) => x !== em); }); await cloud.removeEditor(em); closeModal(); openSettings(); }
     catch (err) { toast(err.message, 5000); }
+  }));
+
+  const wireRow = (row) => ($('.del', row).onclick = () => row.remove());
+  $$('.calrow', sh).forEach(wireRow);
+  $('#addCal').onclick = () => {
+    const div = document.createElement('div');
+    const palette = ['#0891b2', '#db2777', '#65a30d', '#ca8a04', '#4f46e5', '#0d9488'];
+    div.innerHTML = calRow({ id: '', name: '', shared: true, color: palette[S.cal.calendars.length % palette.length] });
+    const row = div.firstElementChild;
+    $('#cals').appendChild(row);
+    wireRow(row);
+    $('.name', row).focus();
   };
-  if ($('#saveTok')) $('#saveTok').onclick = () => {
-    const t = $('#tok').value.trim();
-    if (!t) return toast('Paste a token first');
-    S.token = t; store.set('token', t); closeModal(); renderMain(); toast('You can now add and import events');
-  };
-  if ($('#dropTok')) $('#dropTok').onclick = () => { S.token = null; store.set('token', null); closeModal(); renderMain(); };
-  $('#lockBtn').onclick = () => { store.set('pass', null); S.pass = null; S.cal = null; closeModal(); renderLock(); };
-  $('#copyLink').onclick = async () => {
-    try { await navigator.clipboard.writeText(url); toast('Link copied'); }
-    catch { prompt('Copy this link:', url); }
+  $('#saveCals').onclick = async () => {
+    const used = new Set();
+    const cals = $$('.calrow', sh).map((row) => {
+      const name = $('.name', row).value.trim();
+      if (!name) return null;
+      let id = row.dataset.id || slug(name);
+      while (used.has(id)) id += '-2';
+      used.add(id);
+      const feedUrl = $('.feed', row).value.trim();
+      return { id, name, color: $('input[type=color]', row).value, shared: $('.shared', row).checked, ...(feedUrl ? { feedUrl } : {}) };
+    }).filter(Boolean);
+    const removed = S.cal.calendars.filter((c) => !cals.some((x) => x.id === c.id));
+    let dropEvents = false;
+    if (removed.length) {
+      const n = S.cal.events.filter((e) => removed.some((c) => c.id === e.cal)).length;
+      if (n) dropEvents = confirm(`Also delete the ${n} event${n === 1 ? '' : 's'} on ${removed.map((c) => c.name).join(', ')}?`);
+    }
+    try {
+      await saveCal((d) => {
+        d.calendars = cals;
+        if (dropEvents) d.events = d.events.filter((e) => !removed.some((c) => c.id === e.cal));
+      });
+      closeModal(); toast('Saved', 2500);
+    } catch (err) { toast(err.message, 5000); }
   };
 }
 
 /* ---------- refresh ---------- */
 async function refresh() {
-  if (!S.pass || !$('#modal').classList.contains('hidden')) return;
-  try {
-    const f = await readFile(S.relative ? SHARED_FILE : CAL_FILE);
-    if (f.text) { S.cal = await decryptJSON(f.text, S.pass); if (!S.relative) S.calSalt = saltOf(f.text); }
-    await loadFeeds();
-    await loadInbox();
-    S.loadedAt = Date.now();
-    renderMain();
-  } catch {}
+  if (!S.space || !S.cal) return;
+  await loadFeeds();
+  S.loadedAt = Date.now();
+  if ($('#modal').classList.contains('hidden')) renderMain();
 }
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && S.pass && Date.now() - S.loadedAt > 5 * 60 * 1000) refresh();
+  if (document.visibilityState === 'visible' && S.cal && Date.now() - S.loadedAt > 5 * 60 * 1000) refresh();
 });
+// Changes that arrived while a sheet was open get drawn when it closes.
+new MutationObserver(() => { if (S.dirty && $('#modal').classList.contains('hidden')) { S.dirty = false; renderMain(); } })
+  .observe($('#modal'), { attributes: true, attributeFilter: ['class'] });
 
 function applyTextSize() {
   document.documentElement.classList.remove('big', 'huge');
