@@ -225,3 +225,7 @@ html, body { overflow-x: hidden; }
 
 .dup { color: #b45309; font-weight: 600; font-size: 13px; }
 @media (prefers-color-scheme: dark) { .dup { color: #fbbf24; } }
+
+.searchbar { display: flex; gap: 8px; margin-top: 8px; }
+.searchbar .in { flex: 1; font-size: 16px; }
+#searchBtn { font-size: 18px; }

@@ -1,9 +1,9 @@
-import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=16';
-import { parseICS, hashId } from './lib/ics.js?v=16';
-import { parseScheduleText } from './lib/schedule-text.js?v=16';
-import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=16';
-import { classifyMail, scoreRow, mergeRows, splitSentences, KEEP_SCORE, CHECK_SCORE, EVENT } from './lib/mail-filter.js?v=16';
-import { initCloud } from './lib/cloud.js?v=16';
+import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=17';
+import { parseICS, hashId } from './lib/ics.js?v=17';
+import { parseScheduleText } from './lib/schedule-text.js?v=17';
+import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=17';
+import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT } from './lib/mail-filter.js?v=17';
+import { initCloud } from './lib/cloud.js?v=17';
 
 /* ---------- config ---------- */
 const CONFIG = { owner: 'samahlersmeyer-prog', repo: 'family-calendar', branch: 'main' };
@@ -457,7 +457,9 @@ function renderMain() {
   <header class="top">
     <div class="row1">
       <div class="brand">${esc(S.cal.title || 'Family Calendar')}</div>
+      <button class="btn icon ghost" id="searchBtn" aria-label="Search">🔍</button>
     </div>
+    ${S.q !== undefined ? `<div class="searchbar"><input class="in" id="q" type="search" placeholder="Search events, places, notes…" value="${esc(S.q)}" autocomplete="off"><button class="btn" id="qx">Done</button></div>` : ''}
     <div class="row2">
       <div class="seg"><button data-view="list" class="${S.view === 'list' ? 'on' : ''}">Upcoming</button><button data-view="week" class="${S.view === 'week' ? 'on' : ''}">Week</button><button data-view="month" class="${S.view === 'month' ? 'on' : ''}">Month</button></div>
     </div>
@@ -473,6 +475,11 @@ function renderMain() {
     <button data-tab="settings"><span>⚙️</span>Settings</button>
   </nav>`;
   $$('[data-view]').forEach((b) => (b.onclick = () => { S.view = b.dataset.view; store.set('view', S.view); renderMain(); }));
+  $('#searchBtn').onclick = () => { S.q = S.q === undefined ? '' : undefined; renderMain(); if (S.q !== undefined) $('#q').focus(); };
+  if ($('#q')) {
+    $('#q').oninput = () => { S.q = $('#q').value; renderSearch(); };
+    $('#qx').onclick = () => { S.q = undefined; renderMain(); };
+  }
   $$('[data-kid]').forEach((b) => (b.onclick = () => { S.kid = b.dataset.kid; store.set('kid', S.kid || null); renderMain(); }));
   $$('[data-cal]').forEach((b) => (b.onclick = () => {
     const id = b.dataset.cal;
@@ -490,6 +497,7 @@ function renderMain() {
     settings: openSettings,
   };
   $$('[data-tab]', $('.tabbar')).forEach((b) => (b.onclick = () => actions[b.dataset.tab]()));
+  if (S.q) return renderSearch();
   S.view === 'month' ? renderMonth() : S.view === 'week' ? renderWeek() : renderList();
 }
 
@@ -591,6 +599,28 @@ function renderMonth() {
   const ov = overlapMap(evs);
   $('#daylist').innerHTML = `<h3><span class="rel">${esc(dayLabel(S.day))}</span><span>${dateLine(S.day)}</span></h3>${evs.length ? evs.map((e) => evRow(e, ov)).join('') : '<p class="muted">Nothing this day.</p>'}`;
   bindEvents($('#daylist'));
+}
+
+/* search: everything from 60 days ago on — titles, places, notes, calendar names, who added it */
+function renderSearch() {
+  const view = $('#view');
+  if (!S.q || !S.q.trim()) { S.view === 'month' ? renderMonth() : S.view === 'week' ? renderWeek() : renderList(); return; }
+  const terms = S.q.toLowerCase().split(/\s+/).filter(Boolean);
+  const from = addDays(todayWall(), -60);
+  const hits = allEvents().filter((e) => e.start.slice(0, 10) >= from).filter((e) => {
+    const hay = `${e.title} ${e.location || ''} ${e.notes || ''} ${calById(e.cal).name} ${e.addedBy || ''} ${rideFor(e)?.driver || ''}`.toLowerCase();
+    return terms.every((t) => hay.includes(t));
+  }).sort((a, b) => a.start.localeCompare(b.start)).slice(0, 150);
+  if (!hits.length) { view.innerHTML = `<div class="empty"><p><b>No matches for “${esc(S.q)}”.</b></p><p class="muted">Searches titles, places, notes and calendar names.</p></div>`; return; }
+  const today = todayWall();
+  let last = '';
+  view.innerHTML = `<section class="day"><p class="help">${hits.length} match${hits.length === 1 ? '' : 'es'}</p>` + hits.map((e) => {
+    const d = e.start.slice(0, 10);
+    const h = d !== last ? `<h3 class="${d < today ? 'muted' : ''}"><span class="rel">${esc(dayLabel(d))}</span><span>${dayLabel(d) === fmtDay(d) ? '' : esc(MONTHS[+d.slice(5, 7) - 1] + ' ' + +d.slice(8) + (d.slice(0, 4) !== today.slice(0, 4) ? ', ' + d.slice(0, 4) : ''))}</span></h3>` : '';
+    last = d;
+    return h + evRow(e);
+  }).join('') + '</section>';
+  bindEvents(view);
 }
 
 function renderWeek() {
@@ -1196,13 +1226,10 @@ function loadGIS() {
 
 function emailPane() {
   if (!googleClientId()) return `<p class="help" style="margin-top:14px">Email scanning needs a one-time Google setup. Open ⚙︎ Settings → <b>Email scanning</b>.</p>`;
-  const last = +store.get('lastScan') || 0;
-  const since = last ? Math.min(60, Math.max(1, Math.ceil((Date.now() - last) / 864e5) + 1)) : 0;
-  return `<p class="help" style="margin-top:14px">Looks through <b>your</b> Gmail for invites, schedules and events you haven’t reviewed yet. Nothing is added until you check it.</p>
+  return `<p class="help" style="margin-top:14px">Looks through <b>your</b> Gmail for invites, schedules and events. Anything already on the calendar is left out, and nothing is added until you check it.</p>
     <label class="f">Look back</label>
     <select class="in" id="days">
-      ${since ? `<option value="${since}">Since my last scan (${since} day${since === 1 ? '' : 's'})</option>` : ''}
-      ${[7, 14, 30, 60].map((d) => `<option value="${d}" ${!since && d === 30 ? 'selected' : ''}>Last ${d} days</option>`).join('')}
+      ${[14, 30, 60, 90].map((d) => `<option value="${d}" ${d === 30 ? 'selected' : ''}>Last ${d} days</option>`).join('')}
     </select>
     <div class="actions"><button class="btn primary" id="scanBtn">Sign in with Google &amp; scan</button></div>`;
 }
@@ -1254,6 +1281,7 @@ const CAL_HINTS = [
   [/cross country|\bxc\b|nationals/, 'max-xc'],
   [/baseball|little league|travel ball/, 'theo-baseball'],
   [/church|choir|\bsing|sunday school|christmas program|chapel|worship|\bvbs\b|youth group/, 'church'],
+  [/school|holy cross|field trip|\bband\b|concert|teacher|homeroom|classroom|\bgrade\b|factsmgt|renweb|picture day|conferences?|clhscadets|concordia/, 'school'],
 ];
 function guessCalText(t) {
   t = t.toLowerCase();
@@ -1288,7 +1316,7 @@ async function extractMail(m, token) {
     const cleanSubject = subject.replace(/^((re|fwd?|fw):\s*)+/i, '').slice(0, 70);
     const sent = h.date ? new Date(h.date) : null;
     const base = sent && !isNaN(sent) ? utcToWall(sent).slice(0, 10) : undefined;
-    for (const r of mergeRows(parseScheduleText(splitSentences(cleanSubject + '\n' + body), { base }))) {
+    for (const r of mergeRows(groupRows(parseScheduleText(splitSentences(cleanSubject + '\n\n' + body), { base }), cleanSubject))) {
       if (r.date < today || r.date > addDays(today, 400)) continue;
       const score = scoreRow(r, mail);
       if (score < KEEP_SCORE) continue;
@@ -1296,7 +1324,7 @@ async function extractMail(m, token) {
       if (keys.has(k)) continue;
       keys.add(k);
       const words = (r.title || '').split(/\s+/).length;
-      const title = r.title && r.title.length >= 3 && words <= 7 ? r.title : cleanSubject;
+      const title = r.title && r.title.length >= 3 && words <= 12 ? r.title : cleanSubject;
       items.push({ kind: 'txt', score, row: { ...r, title } });
       if (items.length >= 8) break;
     }
@@ -1306,41 +1334,62 @@ async function extractMail(m, token) {
 
 async function runEmailScan(token) {
   const review = $('#review');
-  const days = +($('#days')?.value || 14);
+  if (!review) return;
+  const days = +($('#days')?.value || 30);
   review.innerHTML = `<p class="muted">Searching your email…</p>`;
   try {
-    const seen = new Set(JSON.parse(store.get('seenMail') || '[]'));
-    const list = await gm(`/messages?maxResults=80&q=${encodeURIComponent(`newer_than:${days}d ${MAIL_QUERY}`)}`, token);
-    const ids = (list.messages || []).map((m) => m.id).filter((id) => !seen.has(id));
-    const found = [];
-    for (let i = 0; i < ids.length; i++) {
-      review.innerHTML = `<p class="muted">Reading email ${i + 1} of ${ids.length}…</p>`;
-      try {
-        const mail = await extractMail(await gm(`/messages/${ids[i]}?format=full`, token), token);
-        if (mail.items.length) found.push(mail);
-      } catch (e) {
-        if (/sign-in expired|said no/.test(e.message)) throw e; // real Gmail problems stop the scan
-        console.warn('Skipped an email:', e); // one odd email shouldn't stop the rest
+    // Every matching email in the window is read each time (nothing is skipped because it was seen before);
+    // events already on the calendar, or ones you said no to, are left out of the review.
+    const ids = [];
+    let pageToken = '';
+    do {
+      const list = await gm(`/messages?maxResults=100&q=${encodeURIComponent(`newer_than:${days}d ${MAIL_QUERY}`)}${pageToken ? '&pageToken=' + pageToken : ''}`, token);
+      ids.push(...(list.messages || []).map((m) => m.id));
+      pageToken = list.nextPageToken;
+    } while (pageToken && ids.length < 400);
+    const total = ids.length, queue = [...ids], found = [];
+    let done = 0;
+    const work = async () => {
+      while (queue.length) {
+        const id = queue.shift();
+        try {
+          const mail = await extractMail(await gm(`/messages/${id}?format=full`, token), token);
+          if (mail.items.length) found.push(mail);
+        } catch (e) {
+          if (/sign-in expired|said no/.test(e.message)) throw e; // real Gmail problems stop the scan
+          console.warn('Skipped an email:', e); // one odd email shouldn't stop the rest
+        }
+        review.innerHTML = `<p class="muted">Reading email ${++done} of ${total}…</p>`;
       }
+    };
+    await Promise.all(Array.from({ length: 6 }, work));
+    const no = new Set(JSON.parse(store.get('dismissedMail') || '[]'));
+    for (const f of found) {
+      f.items = f.items.filter((it) => {
+        const r = it.kind === 'ics' ? { title: it.ev.title, start: it.ev.start, allDay: it.ev.allDay } : { title: it.row.title, start: it.row.time ? `${it.row.date}T${it.row.time}` : it.row.date, allDay: !it.row.time };
+        it.key = `${f.id}|${r.start}`;
+        return !no.has(it.key) && !findDuplicate(r);
+      });
     }
     store.set('lastScan', String(Date.now()));
-    renderEmailReview(found, ids);
+    renderEmailReview(found.filter((f) => f.items.length), ids);
   } catch (e) {
     review.innerHTML = `<p class="bad help">${esc(e.message)}</p>`;
   }
 }
 
-function markSeen(ids) {
-  const seen = JSON.parse(store.get('seenMail') || '[]');
-  store.set('seenMail', JSON.stringify([...seen, ...ids].slice(-1500)));
+/** Remember the suggestions you said no to, so they don't keep coming back. */
+function dismissItems(keys) {
+  const no = JSON.parse(store.get('dismissedMail') || '[]');
+  store.set('dismissedMail', JSON.stringify([...no, ...keys].slice(-3000)));
 }
 
 function renderEmailReview(found, ids) {
   const review = $('#review');
+  if (!review) return; // the window was closed while scanning
   const existing = new Set(allEvents().map((e) => e.title.toLowerCase() + '|' + e.start));
   if (!found.length) {
-    markSeen(ids);
-    review.innerHTML = `<p class="muted">${ids.length ? `Checked ${ids.length} new email${ids.length === 1 ? '' : 's'} — nothing you need to be at.` : 'No new emails to check.'}</p>`;
+    review.innerHTML = `<p class="muted">${ids.length ? `Checked ${ids.length} email${ids.length === 1 ? '' : 's'} — everything is already on the calendar.` : 'No emails about events in that time.'}</p>`;
     return;
   }
   const rowOf = (it) => it.kind === 'ics'
@@ -1370,7 +1419,7 @@ function renderEmailReview(found, ids) {
   const count = () => { const n = $$('#rows .rrow > input:checked').length; btn.textContent = n ? `Add ${n} event${n === 1 ? '' : 's'}` : 'Add events'; btn.disabled = !n; };
   $$('#rows .rrow > input').forEach((c) => (c.onchange = count));
   count();
-  $('#skipAll').onclick = () => { markSeen(ids); closeModal(); toast('Okay — those emails won’t show up again'); };
+  $('#skipAll').onclick = () => { dismissItems(found.flatMap((f) => f.items.map((it) => it.key))); closeModal(); toast('Okay — those won’t show up again'); };
   btn.onclick = async () => {
     const out = [];
     for (const row of $$('#rows .rrow')) {
@@ -1387,7 +1436,7 @@ function renderEmailReview(found, ids) {
       } else end = !time ? addDays(date, 1) : it.row.endTime && it.row.time === time ? `${date}T${it.row.endTime}` : addMinutes(start, 60);
       if (end <= start) end = addMinutes(start, 60);
       out.push({ id: hashId(calId + '|' + start + '|' + title), cal: calId, title, start, end, allDay: !time, location: v('location'),
-        notes: it.kind === 'ics' ? it.ev.notes : `From email: ${found[+row.dataset.m].subject}`, source: 'email' });
+        notes: it.kind === 'ics' ? it.ev.notes : `${it.row.notes ? it.row.notes + '\n' : ''}From email: ${found[+row.dataset.m].subject} (${found[+row.dataset.m].from})`, source: 'email' });
     }
     btn.disabled = true; btn.textContent = 'Saving…';
     try {
@@ -1396,7 +1445,7 @@ function renderEmailReview(found, ids) {
         const have = new Set(d.events.map((e) => e.id));
         for (const e of out) if (!have.has(e.id)) { d.events.push(e); added++; }
       }, `Add ${out.length} events from email`);
-      markSeen(ids);
+      dismissItems($$('#rows .rrow').filter((row) => !$('input[type=checkbox]', row).checked).map((row) => found[+row.dataset.m].items[+row.dataset.i].key));
       closeModal();
       toast(`Added ${added} event${added === 1 ? '' : 's'} from email`);
     } catch (err) { count(); toast(err.message, 5000); }
