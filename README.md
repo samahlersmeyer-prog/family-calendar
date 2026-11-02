@@ -24,7 +24,7 @@ A shared family calendar that runs free on GitHub Pages.
 
 1. Google Calendar → **+ Other calendars → Create new calendar** named `Family Calendar (Echo)`. In its settings, copy the **Calendar ID**.
 2. [console.cloud.google.com](https://console.cloud.google.com) → project **family-calendar-513401** → **APIs & Services → Library** → enable **Google Calendar API**.
-3. **IAM & Admin → Service Accounts → Create service account** named `echo-sync`. Give it the role **Cloud Datastore User** (lets it read private events). Open it → **Keys → Add key → JSON** (downloads a file).
+3. **IAM & Admin → Service Accounts → Create service account** named `echo-sync`. Give it the role **Cloud Datastore Viewer** (read-only; lets it read private events). Open it → **Keys → Add key → JSON** (downloads a file).
 4. Back in the new calendar's settings → **Share with specific people** → add the service account's email → **Make changes to events**.
 5. GitHub → **Settings → Secrets and variables → Actions**: add `GOOGLE_SA_KEY` (paste the whole JSON file) and `GOOGLE_CALENDAR_ID`.
 6. **Actions → Sync team feeds → Run workflow** to fill it now.

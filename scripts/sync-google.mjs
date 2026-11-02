@@ -63,7 +63,7 @@ async function readEvents(space, token) {
   let r = await run(token, false);
   let all = true;
   if (r.status === 403 || r.status === 401) {
-    console.log('⚠ The service account can’t read private events (give it the “Cloud Datastore User” role). Copying shared events only.');
+    console.log('⚠ The service account can’t read private events (give it the “Cloud Datastore Viewer” role). Copying shared events only.');
     r = await run(null, true); all = false;
   }
   if (!r.ok) throw new Error(`Couldn’t read the family calendar: HTTP ${r.status} ${await r.text()}`);
