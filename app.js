@@ -1,10 +1,10 @@
-import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=19';
-import { parseICS, hashId } from './lib/ics.js?v=19';
-import { parseScheduleText } from './lib/schedule-text.js?v=19';
-import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=19';
-import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT } from './lib/mail-filter.js?v=19';
-import { initCloud } from './lib/cloud.js?v=19';
-import { REPEATS, occurrences, mergeFeeds } from './lib/events.js?v=19';
+import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=21';
+import { parseICS, hashId } from './lib/ics.js?v=21';
+import { parseScheduleText } from './lib/schedule-text.js?v=21';
+import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=21';
+import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT } from './lib/mail-filter.js?v=21';
+import { initCloud } from './lib/cloud.js?v=21';
+import { REPEATS, occurrences, mergeFeeds } from './lib/events.js?v=21';
 
 /* ---------- config ---------- */
 const CONFIG = { owner: 'samahlersmeyer-prog', repo: 'family-calendar', branch: 'main' };
@@ -71,7 +71,9 @@ const S = {
 };
 const isEditor = () => S.editor;
 const app = $('#app');
-let cloud = null;
+// Until Firebase finishes loading, any tap that needs it gets a friendly message instead of an error.
+const NOT_READY = new Proxy({}, { get: () => () => Promise.reject(new Error('Still connecting — try again in a second.')) });
+let cloud = NOT_READY;
 let unsubs = [];
 
 /* ---------- data (Firebase) ---------- */
@@ -107,8 +109,29 @@ async function saveCal(mutate) {
 async function loadFeeds() {
   try {
     const t = await readRaw('data/feeds-space.enc');
-    S.feeds = t ? await decryptJSON(t, S.space) : { events: [], status: {} };
-  } catch { S.feeds = { events: [], status: {} }; }
+    if (t) S.feeds = await decryptJSON(t, S.space);
+  } catch {} // keep whatever we already had (e.g. the saved copy)
+  saveSnap();
+}
+
+/* ---------- instant open: a saved copy of the last calendar shown on this device ---------- */
+let snapTimer;
+function saveSnap() {
+  clearTimeout(snapTimer);
+  snapTimer = setTimeout(() => {
+    if (!S.space || !S.cal) return;
+    try { store.set('snap', JSON.stringify({ space: S.space, editor: S.editor, email: S.user?.email || '', cal: S.cal, feeds: S.feeds, rides: S.rides })); } catch {}
+  }, 1000);
+}
+function paintFromSnap() {
+  try {
+    const s = JSON.parse(store.get('snap') || 'null');
+    if (!s || !s.cal || !S.space || s.space !== S.space) return false;
+    S.editor = !!s.editor; S.cal = s.cal; S.feeds = s.feeds || S.feeds; S.rides = s.rides || {};
+    if (s.email) S.user = { email: s.email, name: '' };
+    renderMain();
+    return true;
+  } catch { return false; }
 }
 async function loadInbox() {}
 
@@ -121,7 +144,8 @@ addEventListener('online', () => toast('Back online', 2000));
 async function boot() {
   const m = location.hash.match(/[#&]s=([\w-]{16,})/);
   if (m) { S.space = m[1]; store.set('space', m[1]); } // kept in the URL so a Home Screen icon opens straight to the calendar
-  try { cloud = await initCloud(); } catch { return renderLanding('Couldn’t load. Check your internet connection and reload.'); }
+  const painted = paintFromSnap(); // show the last calendar immediately, then bring it up to date
+  try { cloud = await initCloud(); } catch { if (!painted) renderLanding('Couldn’t load. Check your internet connection and reload.'); return; }
   cloud.onUser(onUser);
 }
 
@@ -129,12 +153,27 @@ async function onUser(u) {
   S.user = u;
   S.editor = false;
   if (u) {
+    const known = store.get('editorSpace:' + u.email);
+    if (known) {
+      // Open right away; double-check in the background that this account is still an editor.
+      S.editor = true; S.space = known;
+      cloud.editorSpace(u.email).then((sp) => {
+        if (sp === known) return;
+        store.set('editorSpace:' + u.email, sp || null);
+        store.set('snap', null); S.cal = null;
+        onUser(u);
+      }).catch(() => {});
+      return start();
+    }
     let space = null;
     try { space = await cloud.editorSpace(u.email); } catch {}
-    if (space) { S.editor = true; S.space = space; store.set('space', space); return start(); }
+    if (space) { S.editor = true; S.space = space; store.set('space', space); store.set('editorSpace:' + u.email, space); return start(); }
     if (OWNERS.includes(u.email)) return renderMigrate();
     if (!S.space) return renderLanding(`${esc(u.email)} isn’t set up to edit this calendar yet. Ask Sam to add it in Settings → Editors.`);
     toast('This Google account can view but not edit — ask Sam to add you as an editor', 5000);
+  }
+  if (!u) {
+    try { if (JSON.parse(store.get('snap') || 'null')?.editor) { store.set('snap', null); S.cal = null; } } catch {}
   }
   if (S.space) return start();
   renderLanding();
@@ -168,24 +207,35 @@ function renderLanding(msg = '') {
 
 async function start() {
   unsubs.forEach((f) => f()); unsubs = [];
-  app.innerHTML = `<div class="center muted">Loading…</div>`;
-  const sp = await cloud.getSpace(S.space).catch(() => null);
-  if (!sp) { store.set('space', null); S.space = null; return renderLanding('That calendar link didn’t work. Ask Sam or Emily for a new one.'); }
-  S.cal = { title: sp.title, calendars: sp.calendars || [], editors: sp.editors || [], familyCode: sp.familyCode, codeSet: sp.codeSet, events: [] };
+  const snap = S.cal; // already on screen from the saved copy, if any
+  if (!snap) app.innerHTML = `<div class="center muted">Loading…</div>`;
+  S.cal = { title: '', calendars: [], editors: [], events: [], ...(snap || {}) };
   let first = true;
-  const paint = () => { if ($('#modal').classList.contains('hidden')) renderMain(); else S.dirty = true; };
-  unsubs.push(cloud.watchSpace(S.space, (d) => { if (!d) return; Object.assign(S.cal, { title: d.title, calendars: d.calendars || [], editors: d.editors || [], familyCode: d.familyCode, codeSet: d.codeSet }); if (!first) paint(); }));
-  await new Promise((res) => {
+  const paint = () => { saveSnap(); if ($('#modal').classList.contains('hidden')) renderMain(); else S.dirty = true; };
+  // The space settings and the events load side by side (the phone's offline copy answers first).
+  const spaceReady = new Promise((res) => {
+    unsubs.push(cloud.watchSpace(S.space, (d, fromCache) => {
+      if (!d) { if (fromCache) return; res(false); return; }
+      Object.assign(S.cal, { title: d.title, calendars: d.calendars || [], editors: d.editors || [], familyCode: d.familyCode, codeSet: d.codeSet });
+      res(true); if (!first) paint();
+    }, () => res(false)));
+  });
+  const eventsReady = new Promise((res) => {
     unsubs.push(cloud.watchEvents(S.space, !S.editor, (docs) => {
       S.cal.events = docs;
       if (first) { first = false; res(); } else paint();
     }, (err) => { toast('Couldn’t load events: ' + (err.code || err.message), 6000); res(); }));
   });
-  S.rides = {};
   unsubs.push(cloud.watchRides(S.space, (r) => { S.rides = r || {}; if (!first) paint(); }));
-  await loadFeeds();
+  if (!(await spaceReady)) {
+    unsubs.forEach((f) => f()); unsubs = [];
+    store.set('space', null); store.set('snap', null); S.space = null; S.cal = null;
+    return renderLanding('That calendar link didn’t work. Ask Sam or Emily for a new one.');
+  }
+  await eventsReady;
   S.loadedAt = Date.now();
-  renderMain();
+  paint();
+  loadFeeds().then(() => { if ($('#modal').classList.contains('hidden')) renderMain(); else S.dirty = true; }); // team feeds fill in a moment later
 }
 
 function openSignIn() {
@@ -1544,7 +1594,7 @@ function openSettings() {
   if ($('#signOut')) $('#signOut').onclick = async () => {
     closeModal();
     unsubs.forEach((u) => u()); unsubs = [];
-    store.set('space', null); S.space = null; S.cal = null;
+    store.set('space', null); store.set('snap', null); if (S.user) store.set('editorSpace:' + S.user.email, null); S.space = null; S.cal = null;
     history.replaceState(null, '', location.pathname);
     await cloud.signOut();
     toast('Signed out — this device no longer shows the calendar');

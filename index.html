@@ -13,13 +13,27 @@
   <link rel="manifest" href="manifest.webmanifest">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <link rel="stylesheet" href="style.css?v=20">
+  <link rel="stylesheet" href="style.css?v=21">
+  <!-- Start fetching everything at once instead of one file after another -->
+  <link rel="preconnect" href="https://firestore.googleapis.com" crossorigin>
+  <link rel="preconnect" href="https://www.gstatic.com" crossorigin>
+  <link rel="modulepreload" href="app.js?v=21">
+  <link rel="modulepreload" href="lib/cloud.js?v=21">
+  <link rel="modulepreload" href="lib/crypto.js?v=21">
+  <link rel="modulepreload" href="lib/events.js?v=21">
+  <link rel="modulepreload" href="lib/tz.js?v=21">
+  <link rel="modulepreload" href="lib/ics.js?v=21">
+  <link rel="modulepreload" href="lib/schedule-text.js?v=21">
+  <link rel="modulepreload" href="lib/mail-filter.js?v=21">
+  <link rel="modulepreload" href="https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js">
+  <link rel="modulepreload" href="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js">
+  <link rel="modulepreload" href="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js">
 </head>
 <body>
   <div id="app"><div class="center muted">Loading…</div></div>
   <div id="modal" class="modal hidden"><div class="sheet" id="sheet"></div></div>
   <div id="drop" class="drop hidden"><div>Drop invites, PDFs, flyers or photos to import</div></div>
   <div id="toast" class="toast hidden"></div>
-  <script type="module" src="app.js?v=20"></script>
+  <script type="module" src="app.js?v=21"></script>
 </body>
 </html>

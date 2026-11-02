@@ -1,29 +1,46 @@
-// Lets the calendar open with no signal. App files: network first, saved copy if offline.
-// Library files (versioned URLs): saved copy first. Firestore keeps its own offline copy.
-const CACHE = 'family-calendar-v20';
-const SHELL = ['./', 'index.html', 'style.css?v=20', 'app.js?v=20', 'manifest.webmanifest', 'icon.png', 'icon-192.png'];
+// Makes the calendar open fast and with no signal.
+// - Versioned app files (…?v=21) and library files never change, so they come straight from the saved copy.
+// - The page itself (index.html) is checked online, but if the network is slow we show the saved copy
+//   after a moment and refresh it in the background.
+// - Firestore keeps its own offline copy of the events.
+const V = 21;
+const CACHE = 'family-calendar-v' + V;
+const LIBFILES = ['crypto', 'ics', 'schedule-text', 'tz', 'mail-filter', 'cloud', 'events'].map((f) => `lib/${f}.js?v=${V}`);
+const SHELL = ['./', 'index.html', `style.css?v=${V}`, `app.js?v=${V}`, ...LIBFILES, 'manifest.webmanifest', 'icon.png', 'icon-192.png'];
+const FB = '10.12.2';
+const FIREBASE = ['app', 'auth', 'firestore'].map((m) => `https://www.gstatic.com/firebasejs/${FB}/firebase-${m}.js`);
+
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).catch(() => {}).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE)
+    .then((c) => Promise.all([...SHELL, ...FIREBASE].map((u) => c.add(u).catch(() => {}))))
+    .then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', (e) => {
   e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
 });
+
 const LIBS = /^(www\.gstatic\.com|cdnjs\.cloudflare\.com|cdn\.jsdelivr\.net)$/;
+const save = (r, res) => { if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(r, copy)); } return res; };
+const cacheFirst = (r) => caches.match(r).then((hit) => hit || fetch(r).then((res) => save(r, res)));
+
 self.addEventListener('fetch', (e) => {
   const r = e.request;
   if (r.method !== 'GET') return;
   const u = new URL(r.url);
-  const mine = u.origin === location.origin || u.hostname === 'raw.githubusercontent.com';
-  if (!mine && !LIBS.test(u.hostname)) return; // Firestore, Google sign-in, Gmail: always live
-  if (LIBS.test(u.hostname)) {
-    e.respondWith(caches.match(r).then((hit) => hit || fetch(r).then((res) => {
-      if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(r, copy)); }
-      return res;
-    })));
-    return;
+  const mine = u.origin === location.origin;
+  if (LIBS.test(u.hostname)) return e.respondWith(cacheFirst(r));
+  if (mine && u.searchParams.has('v')) return e.respondWith(cacheFirst(r)); // versioned: never changes
+  if (mine && r.mode === 'navigate') {
+    // Try the network for up to 1.5s, otherwise open the saved page right away (it updates in the background).
+    const net = fetch(r).then((res) => save(r, res));
+    e.waitUntil(net.catch(() => {}));
+    return e.respondWith(caches.match(r, { ignoreSearch: true }).then((hit) => {
+      if (!hit) return net.catch(() => caches.match('./'));
+      return Promise.race([net.catch(() => hit), new Promise((res) => setTimeout(() => res(hit), 1500))]);
+    }));
   }
-  e.respondWith(fetch(r).then((res) => {
-    if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(r, copy)); }
-    return res;
-  }).catch(() => caches.match(r).then((hit) => hit || (r.mode === 'navigate' ? caches.match('./') : Response.error()))));
+  if (mine || u.hostname === 'raw.githubusercontent.com') {
+    e.respondWith(fetch(r).then((res) => save(r, res)).catch(() => caches.match(r, { ignoreSearch: u.hostname === 'raw.githubusercontent.com' }).then((hit) => hit || Response.error())));
+  }
+  // Everything else (Firestore, Google sign-in, Gmail) goes straight to the network.
 });
