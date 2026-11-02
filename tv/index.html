@@ -84,6 +84,16 @@
     .btn { font: inherit; font-size: 1.2rem; font-weight: 700; border: 0; border-radius: 999px; padding: 0.7rem 1.6rem; background: var(--accent); color: #fff; cursor: pointer; }
     .bad { color: var(--accent); font-weight: 700; }
 
+    /* Chores & groceries column (wide screens, only when there's something on the lists) */
+    .withlists .cols { grid-template-columns: 1.05fr 1fr 0.72fr; }
+    .lists .list { flex: 0 1 auto; margin-bottom: 0.9rem; }
+    .item { display: flex; gap: 0.6rem; align-items: center; background: var(--card); border: 1px solid var(--line); border-radius: 0.6rem; padding: 0.45rem 0.65rem; margin-bottom: 0.35rem; cursor: pointer; }
+    .item .box { flex: none; width: 1.4rem; height: 1.4rem; border-radius: 50%; border: 0.15rem solid var(--muted); display: grid; place-items: center; font-weight: 800; font-size: 0.85rem; color: #fff; }
+    .item .txt { font-size: 1.05rem; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .item.done { opacity: 0.5; }
+    .item.done .box { background: var(--accent); border-color: var(--accent); }
+    .item.done .txt { text-decoration: line-through; }
+
     /* Narrow / portrait screens: stack the two columns */
     @media (max-aspect-ratio: 1/1) {
       :root { font-size: clamp(12px, 2.6vw, 28px); }
@@ -94,6 +104,6 @@
 </head>
 <body>
   <div id="app"><div class="center muted">Loading…</div></div>
-  <script type="module" src="tv.js?v=2"></script>
+  <script type="module" src="tv.js?v=3"></script>
 </body>
 </html>

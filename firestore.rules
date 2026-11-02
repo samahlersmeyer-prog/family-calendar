@@ -60,6 +60,32 @@ service cloud.firestore {
           && request.resource.data.driver.size() < 60;
       }
 
+      // Groceries and chores — anyone with the family link (phones, the kitchen display) can check things off.
+      match /items/{itemId} {
+        allow get, list: if true;
+        allow delete: if true;
+        allow create, update: if request.resource.data.keys().hasOnly(['id', 'list', 'text', 'who', 'done', 'doneOn', 'repeat', 'by', 'at'])
+          && request.resource.data.list in ['shop', 'todo']
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() < 200;
+      }
+
+      // Phone notifications. The id is a hash of the phone's secret push address, so it can't be guessed or listed.
+      // Only a signed-in editor can ask for editor notifications (which include private events).
+      match /push/{subId} {
+        allow get, delete: if true;
+        allow list: if false;
+        allow create, update: if request.resource.data.keys().hasOnly(['sub', 'name', 'editor', 'email', 'remind', 'changes', 'weekly', 'practices', 'kid', 'at'])
+          && request.resource.data.sub is map
+          && (request.resource.data.editor != true || (isEditor(space) && request.resource.data.email == me()));
+      }
+
+      // Editors-only settings (weekly email recipients and the Gmail app password that sends it).
+      match /private/{docId} {
+        allow read, write: if isEditor(space);
+      }
+
       match /files/{fileId} {
         allow get: if true;
         allow list: if false;

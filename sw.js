@@ -1,9 +1,9 @@
 // Makes the calendar open fast and with no signal.
-// - Versioned app files (…?v=21) and library files never change, so they come straight from the saved copy.
+// - Versioned app files (…?v=22) and library files never change, so they come straight from the saved copy.
 // - The page itself (index.html) is checked online, but if the network is slow we show the saved copy
 //   after a moment and refresh it in the background.
 // - Firestore keeps its own offline copy of the events.
-const V = 21;
+const V = 22;
 const CACHE = 'family-calendar-v' + V;
 const LIBFILES = ['crypto', 'ics', 'schedule-text', 'tz', 'mail-filter', 'cloud', 'events'].map((f) => `lib/${f}.js?v=${V}`);
 const SHELL = ['./', 'index.html', `style.css?v=${V}`, `app.js?v=${V}`, ...LIBFILES, 'manifest.webmanifest', 'icon.png', 'icon-192.png'];
@@ -43,4 +43,22 @@ self.addEventListener('fetch', (e) => {
     e.respondWith(fetch(r).then((res) => save(r, res)).catch(() => caches.match(r, { ignoreSearch: u.hostname === 'raw.githubusercontent.com' }).then((hit) => hit || Response.error())));
   }
   // Everything else (Firestore, Google sign-in, Gmail) goes straight to the network.
+});
+
+// Phone notifications sent by the GitHub Action (scripts/notify.mjs).
+self.addEventListener('push', (e) => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch { d = { title: 'Family Calendar', body: e.data ? e.data.text() : '' }; }
+  e.waitUntil(self.registration.showNotification(d.title || 'Family Calendar', {
+    body: d.body || '', tag: d.tag, renotify: !!d.tag, icon: 'icon-192.png', badge: 'icon-192.png', data: { url: d.url || './' },
+  }));
+});
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const url = new URL(e.notification.data?.url || './', self.registration.scope).href;
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+    const open = list.find((c) => c.url.startsWith(self.registration.scope));
+    if (open) { open.focus(); return open.navigate ? open.navigate(url).catch(() => {}) : null; }
+    return self.clients.openWindow(url);
+  }));
 });

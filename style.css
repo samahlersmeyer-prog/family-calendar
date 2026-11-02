@@ -231,3 +231,22 @@ html, body { overflow-x: hidden; }
 #searchBtn { font-size: 18px; }
 
 .welcome.approve { width: calc(100% - 32px); text-align: left; cursor: pointer; font: inherit; color: inherit; border-left-color: #16a34a; }
+
+/* practices toggle (end of the kids row) */
+.kid.prac { margin-left: auto; border-style: dashed; padding: 5px 12px; font-size: 14px; }
+.kid.prac.on { background: var(--soft); color: var(--ink); border-style: solid; }
+
+/* lists: groceries and chores */
+.listseg { display: flex; width: 100%; margin-bottom: 10px; }
+.listseg button { flex: 1; }
+.additem { display: grid; gap: 8px; margin-bottom: 8px; }
+.additem .two { margin: 0; }
+.item { display: flex; align-items: center; gap: 12px; padding: 10px 2px; border-bottom: 1px solid var(--line); }
+.item .tick { flex: none; width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--muted); background: transparent; color: #fff; font-weight: 800; font-size: 15px; display: grid; place-items: center; padding: 0; }
+.item.done .tick { background: var(--accent); border-color: var(--accent); }
+.item .txt { flex: 1; font-size: 17px; line-height: 1.3; }
+.item .txt small { display: block; font-size: 13px; color: var(--muted); }
+.item.done .txt { color: var(--muted); text-decoration: line-through; }
+.item .rm { opacity: .5; }
+.donebox { margin-top: 14px; }
+.donebox summary { color: var(--muted); font-weight: 600; cursor: pointer; padding: 6px 0; }

@@ -1,10 +1,10 @@
-import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=21';
-import { parseICS, hashId } from './lib/ics.js?v=21';
-import { parseScheduleText } from './lib/schedule-text.js?v=21';
-import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=21';
-import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT } from './lib/mail-filter.js?v=21';
-import { initCloud } from './lib/cloud.js?v=21';
-import { REPEATS, occurrences, mergeFeeds } from './lib/events.js?v=21';
+import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=22';
+import { parseICS, hashId } from './lib/ics.js?v=22';
+import { parseScheduleText } from './lib/schedule-text.js?v=22';
+import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=22';
+import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT } from './lib/mail-filter.js?v=22';
+import { initCloud } from './lib/cloud.js?v=22';
+import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=22';
 
 /* ---------- config ---------- */
 const CONFIG = { owner: 'samahlersmeyer-prog', repo: 'family-calendar', branch: 'main' };
@@ -64,6 +64,7 @@ const S = {
   kid: store.get('kid') || '',
   week: null,
   rides: {},
+  items: [],           // groceries + chores
   month: todayWall().slice(0, 7),
   day: todayWall(),
   loadedAt: 0,
@@ -227,6 +228,7 @@ async function start() {
     }, (err) => { toast('Couldn’t load events: ' + (err.code || err.message), 6000); res(); }));
   });
   unsubs.push(cloud.watchRides(S.space, (r) => { S.rides = r || {}; if (!first) paint(); }));
+  if (S.editor) unsubs.push(cloud.watchItems(S.space, (items) => { S.itemsErr = items === null; S.items = items || []; if (S.listsOpen) drawLists(); }));
   if (!(await spaceReady)) {
     unsubs.forEach((f) => f()); unsubs = [];
     store.set('space', null); store.set('snap', null); S.space = null; S.cal = null;
@@ -305,20 +307,15 @@ function isLight(hex) {
 }
 const swatch = (c) => `background:${esc(c)};${isLight(c) ? 'box-shadow:inset 0 0 0 1.5px var(--muted);' : ''}`;
 
-/* kids: "show me only Theo" */
-const KIDS = ['Max', 'Theo', 'Junie', 'Louie', 'Josie'];
-const KID_NAMES = { Max: ['Max', 'Maximus'], Theo: ['Theo'], Junie: ['Junie', 'June'], Louie: ['Louie', 'Louis'], Josie: ['Josie', 'Josephine'] };
+/* kids: "show me only Theo" (helpers in lib/events.js) */
 const kidsList = () => S.cal.kids || KIDS;
-const kidRe = (k) => new RegExp('\\b(' + (KID_NAMES[k] || [k]).join('|') + ')\\b', 'i');
-const calKid = (c) => (c.kid !== undefined ? c.kid : c.id === 'mad-apple' ? 'Max' : kidsList().find((k) => kidRe(k).test(c.name || '')) || '');
-const titleKid = (t) => kidsList().find((k) => kidRe(k).test(t || '')) || '';
+const calKid = (c) => calKidOf(c, kidsList());
+const titleKid = (t) => titleKidOf(t, kidsList());
 const eventKid = (e) => calKid(calById(e.cal)) || titleKid(e.title);
-function forKid(e, k) {
-  const ck = calKid(calById(e.cal));
-  if (ck) return ck === k;
-  if (kidRe(k).test(e.title)) return true;
-  return !titleKid(e.title); // family-wide things (no school, family dinner) show for everyone
-}
+const forKid = (e, k) => forKidOf(e, k, calById(e.cal), kidsList());
+
+/* practices: Sam & Emily see them; relatives don't unless they switch them on (per device) */
+const showPractices = () => { const v = store.get('practices'); return v === null ? isEditor() : v === '1'; };
 
 /* repeating events: lib/events.js */
 const repeatLabel = (r) => (r && REPEATS[r.every] ? REPEATS[r.every] + (r.until ? ` until ${fmtDay(r.until)}` : '') : '');
@@ -355,8 +352,7 @@ const about = (e) => new Set([...words(e.title), ...words(String(e.location || '
 function findDuplicate(c, ignoreId) {
   const d = c.start.slice(0, 10);
   const cw = about(c);
-  const saveKid = S.kid; S.kid = ''; // look across everyone, even when a kid filter is on
-  const pool = allEvents(); S.kid = saveKid;
+  const pool = allEvents({ everything: true }); // look across everyone, even when a kid filter is on
   return pool.find((e) => {
     if ((ignoreId && (e.id === ignoreId || e.seriesId === ignoreId)) || e.start.slice(0, 10) !== d) return false;
     if (e.title.trim().toLowerCase() === c.title.trim().toLowerCase()) return true;
@@ -381,7 +377,8 @@ function dupMap(evs) {
   return out;
 }
 
-function allEvents() {
+function allEvents({ everything = false } = {}) {
+  const practices = everything || showPractices();
   const seen = new Set();
   const out = [];
   // Team-feed games that match an event already on the calendar are merged into it (lib/events.js).
@@ -391,7 +388,8 @@ function allEvents() {
   for (const e0 of [...S.cal.events.filter((e) => !e.pending).flatMap(occurrences), ...myWaiting, ...feeds, ...(S.inbox.events || [])]) {
     const e = merged.get(e0.id) || e0;
     if (seen.has(e.id) || S.hidden.has(e.cal)) continue;
-    if (S.kid && !forKid(e, S.kid)) continue;
+    if (!everything && S.kid && !forKid(e, S.kid)) continue;
+    if (!practices && kindOf(e) === 'practice') continue;
     seen.add(e.id);
     out.push(e);
   }
@@ -491,6 +489,7 @@ function renderMain() {
     ${S.q !== undefined ? `<div class="searchbar"><input class="in" id="q" type="search" placeholder="Search events, places, notes…" value="${esc(S.q)}" autocomplete="off"><button class="btn" id="qx">Done</button></div>` : ''}
     <div class="row2">
       <div class="seg"><button data-view="list" class="${S.view === 'list' ? 'on' : ''}">Upcoming</button><button data-view="week" class="${S.view === 'week' ? 'on' : ''}">Week</button><button data-view="month" class="${S.view === 'month' ? 'on' : ''}">Month</button></div>
+      <button class="kid prac ${showPractices() ? 'on' : ''}" id="pracBtn" aria-pressed="${showPractices()}" title="Show or hide practices and workouts">${showPractices() ? '✓ ' : ''}Practices</button>
     </div>
   </header>
   ${welcomeBanner()}
@@ -501,7 +500,7 @@ function renderMain() {
   <nav class="tabbar" aria-label="Menu">
     <button data-tab="cal"><span>📅</span>Calendar</button>
     <button data-tab="add" class="addtab"><span>＋</span>Add</button>
-    ${family ? `<button data-tab="email"><span>✉️</span>Email</button><button data-tab="import"><span>📄</span>Import</button>` : ''}
+    ${family ? `<button data-tab="lists"><span>🛒</span>Lists</button><button data-tab="email"><span>✉️</span>Email</button><button data-tab="import"><span>📄</span>Import</button>` : ''}
     <button data-tab="settings"><span>⚙️</span>Settings</button>
   </nav>`;
   $$('[data-view]').forEach((b) => (b.onclick = () => { S.view = b.dataset.view; store.set('view', S.view); renderMain(); }));
@@ -512,6 +511,11 @@ function renderMain() {
     $('#qx').onclick = () => { S.q = undefined; renderMain(); };
   }
   $$('[data-kid]').forEach((b) => (b.onclick = () => { S.kid = b.dataset.kid; store.set('kid', S.kid || null); renderMain(); }));
+  $('#pracBtn').onclick = () => {
+    const on = !showPractices();
+    store.set('practices', on === isEditor() ? null : on ? '1' : '0'); // back to the default if it matches
+    renderMain(); toast(on ? 'Showing practices' : 'Practices hidden — games, programs, church and school only');
+  };
   $$('[data-cal]').forEach((b) => (b.onclick = () => {
     const id = b.dataset.cal;
     S.hidden.has(id) ? S.hidden.delete(id) : S.hidden.add(id);
@@ -523,6 +527,7 @@ function renderMain() {
   const actions = {
     cal: () => { if (S.view !== 'list') { S.view = 'list'; store.set('view', 'list'); renderMain(); } scrollTo({ top: 0, behavior: 'smooth' }); },
     add: () => (isEditor() ? openEdit(null, day()) : openFamilyAdd(day())),
+    lists: needEditor(() => openLists()),
     email: needEditor(() => openImport(null, 'email')),
     import: needEditor(() => openImport()),
     settings: openSettings,
@@ -533,11 +538,11 @@ function renderMain() {
 }
 
 function welcomeBanner() {
-  if (S.relative && !store.get('welcomedRel')) return `<div class="welcome"><div><b>Welcome! 👋</b> These are the Ahlersmeyer kids’ games, programs and events.
+  if (S.relative && !store.get('welcomedRel')) return `<div class="welcome"><div><b>Welcome! 👋</b> These are the Ahlersmeyer kids’ games, concerts, church and school events. Want practices too? Tap <b>Practices</b> above.
     Tap any event for the time, place and directions.${canFamilyAdd() ? ' Tap <b>+ Add</b> to put your own family event on the calendar.' : ''}
     ${isApple ? ' Tip: tap <b>Share → Add to Home Screen</b> to keep it one tap away.' : ''}</div><button class="btn icon ghost" id="welcomeX" aria-label="Got it">✕</button></div>`;
   if (!S.relative && isEditor() && !store.get('welcomedEd')) return `<div class="welcome"><div><b>You’re an editor.</b> Tap <b>+ Add</b> for a new event, <b>✉︎ Email</b> to pull events from your Gmail, or <b>Import</b> to drop in a schedule PDF.
-    Relatives see everything except the <b>Family</b> calendar and anything marked 🔒.</div><button class="btn icon ghost" id="welcomeX" aria-label="Got it">✕</button></div>`;
+    Relatives see everything except the <b>Family</b> calendar and anything marked 🔒, and practices are hidden for them unless they tap <b>Practices</b>.</div><button class="btn icon ghost" id="welcomeX" aria-label="Got it">✕</button></div>`;
   return '';
 }
 
@@ -686,7 +691,7 @@ function openModal(html) {
   $('#modal').classList.remove('hidden');
   return $('#sheet');
 }
-function closeModal() { $('#modal').classList.add('hidden'); $('#sheet').innerHTML = ''; }
+function closeModal() { $('#modal').classList.add('hidden'); $('#sheet').innerHTML = ''; S.listsOpen = false; }
 $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
 
@@ -724,6 +729,7 @@ function openDetail(id) {
       ${e.notes ? `<div class="notes">${esc(e.notes)}</div>` : ''}
       ${e.addedBy ? `<div class="help">Added by ${esc(e.addedBy)}</div>` : ''}
       ${e.private && !S.relative ? `<div class="help">🔒 Only you two — extended family doesn’t see this</div>` : ''}
+      ${isEditor() && kindOf(e) === 'practice' && !e.private ? `<div class="help">🏃 Practice — extended family only sees it if they switch practices on</div>` : ''}
       ${fromFeed ? `<div class="help">Synced from the team’s calendar — changes come from the team app.</div>` : ''}
       ${(() => { const d = isEditor() && dupMap((indexByDay(e.start.slice(0, 10), e.start.slice(0, 10))[e.start.slice(0, 10)] || []))[e.id]; return d ? `<div class="help bad">♊ Looks like the same thing as “${esc(d.title)}” (${esc(timeRange(d))}). If so, delete this one.</div>` : ''; })()}
       ${e.pending ? `<div class="help">⏳ Waiting for Sam or Emily to OK it — only you can see it for now.</div>` : ''}
@@ -899,7 +905,9 @@ function openEdit(e, day) {
         <b>📎 Drop or choose a flyer, PDF, screenshot or invite</b><br><span class="help">I’ll read it and fill in the details below</span></label>
       <div id="smartStatus" class="help"></div>
       <label class="f">What</label><input class="in" name="title" value="${esc(e.title)}" required placeholder="e.g. Theo practice">
-      <label class="f">Calendar</label><select class="in" name="cal">${calOptions(e.cal)}</select>
+      <div class="two"><div><label class="f">Calendar</label><select class="in" name="cal">${calOptions(e.cal)}</select></div>
+        <div><label class="f">Type</label><select class="in" name="kind"><option value="">${esc(KINDS[kindOf({ title: e.title })])} (guess)</option>${Object.entries(KINDS).map(([k, v]) => `<option value="${k}" ${e.kind === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></div></div>
+      <p class="help">Practices are hidden from extended family unless they switch them on.</p>
       <div class="two"><div><label class="f">Date</label><input class="in" type="date" name="date" value="${d}" required></div>
         <div class="alld ${e.allDay ? '' : 'hidden'}"><label class="f">Through</label><input class="in" type="date" name="last" value="${lastDay}"></div></div>
       <label class="check"><input type="checkbox" name="allDay" ${e.allDay ? 'checked' : ''}> All day</label>
@@ -928,6 +936,8 @@ function openEdit(e, day) {
   f.files.onchange = showNew;
   $('#smartFile').onchange = (ev) => { if (ev.target.files[0]) smartFill(ev.target.files[0], f, pending, showNew); };
   f._smart = (file) => smartFill(file, f, pending, showNew);
+  // keep the "(guess)" label in step with the title
+  f.title.addEventListener('input', () => { f.kind.options[0].textContent = KINDS[kindOf({ title: f.title.value })] + ' (guess)'; });
   f.rep.onchange = () => $('.untilw', f).classList.toggle('hidden', !f.rep.value);
   f.allDay.onchange = () => { $('.timed', f).classList.toggle('hidden', f.allDay.checked); $('.alld', f).classList.toggle('hidden', !f.allDay.checked); };
   f.onsubmit = async (ev) => {
@@ -944,6 +954,7 @@ function openEdit(e, day) {
       if (end <= start) end = addDays(end, 1);
     }
     const out = { ...e, createdAt: e.createdAt || Date.now(), id: e.id || newId(), cal: f.cal.value, title: f.title.value.trim(), allDay, start, end, location: f.location.value.trim(), notes: f.notes.value.trim(), source: e.source || 'manual' };
+    if (f.kind.value) out.kind = f.kind.value; else delete out.kind;
     if (f.priv.checked) out.private = true; else delete out.private;
     if (f.maybe.checked) out.maybe = true; else delete out.maybe;
     if (f.rep.value) out.repeat = { every: f.rep.value, ...(f.until.value ? { until: f.until.value } : {}), skip: (e.repeat?.skip || []).filter((d) => d >= date) };
@@ -1096,7 +1107,7 @@ async function smartFill(file, f, pending, showNew) {
   } catch (err) { status(err.message, true); }
 }
 function setForm(f, v) {
-  if (v.title) f.title.value = v.title;
+  if (v.title) { f.title.value = v.title; f.title.dispatchEvent(new Event('input')); }
   if (v.date) { f.date.value = v.date; if (f.last) f.last.value = v.date; }
   const allDay = !v.time;
   f.allDay.checked = allDay; f.allDay.onchange();
@@ -1530,6 +1541,204 @@ addEventListener('drop', (e) => {
   else openImport(files);
 });
 
+/* ---------- lists: groceries and chores ---------- */
+const WHO = () => [...kidsList(), 'Mom', 'Dad'];
+const REPEAT_CHORE = { '': 'Once', day: 'Every day', week: 'Every week' };
+const weekStart = (d) => addDays(d, -dow(d));
+/** Done? Repeating chores reset on their own each day or week. */
+function itemDone(i) {
+  if (!i.repeat) return !!i.done;
+  const t = todayWall();
+  return !!i.doneOn && (i.repeat === 'day' ? i.doneOn === t : i.doneOn >= weekStart(t));
+}
+const listErr = (err) => toast(/permission/i.test(err.code || err.message) ? 'Lists aren’t switched on yet — Sam needs to update the database rules (see the README).' : err.message, 6000);
+
+function openLists(tab = store.get('listTab') || 'shop') {
+  S.listTab = tab; S.listsOpen = true;
+  const sh = openModal(`
+    <div class="head"><div><h2>Lists</h2><p class="help">Shared with Emily and the kitchen display. Changes show everywhere right away.</p></div><button class="btn icon ghost" data-close aria-label="Close">✕</button></div>
+    <div class="seg listseg"><button data-lt="shop">🛒 Groceries</button><button data-lt="todo">✅ Chores &amp; to-dos</button></div>
+    <form id="addItem" class="additem">
+      <input class="in" name="text" maxlength="190" autocomplete="off" required>
+      <div class="two todoonly"><select class="in" name="who"><option value="">Anyone</option>${WHO().map((w) => `<option>${esc(w)}</option>`).join('')}</select>
+        <select class="in" name="repeat">${Object.entries(REPEAT_CHORE).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div>
+      <button class="btn primary">Add</button>
+    </form>
+    <div id="listBody"></div>`);
+  S.listsOpen = true;
+  $('[data-close]', sh).onclick = closeModal;
+  const f = $('#addItem');
+  const setTab = (t) => {
+    S.listTab = t; store.set('listTab', t);
+    $$('[data-lt]', sh).forEach((b) => b.classList.toggle('on', b.dataset.lt === t));
+    $('.todoonly', sh).classList.toggle('hidden', t !== 'todo');
+    f.text.placeholder = t === 'shop' ? 'Add an item (milk, eggs…)' : 'Add a chore or to-do';
+    drawLists();
+  };
+  $$('[data-lt]', sh).forEach((b) => (b.onclick = () => setTab(b.dataset.lt)));
+  f.onsubmit = async (ev) => {
+    ev.preventDefault();
+    const texts = S.listTab === 'shop' ? f.text.value.split(/,|\n/).map((x) => x.trim()).filter(Boolean) : [f.text.value.trim()].filter(Boolean);
+    if (!texts.length) return;
+    f.text.value = ''; f.text.focus();
+    try {
+      for (const text of texts) {
+        const item = { id: newId(), list: S.listTab, text: text.slice(0, 190), done: false, by: myName() || '', at: Date.now(),
+          ...(S.listTab === 'todo' ? { who: f.who.value, repeat: f.repeat.value } : {}) };
+        S.items = [...S.items, item]; drawLists();
+        await cloud.putItem(S.space, item);
+      }
+    } catch (err) { listErr(err); }
+  };
+  setTab(tab);
+}
+
+function drawLists() {
+  const box = $('#listBody');
+  if (!box) return;
+  if (S.itemsErr) { box.innerHTML = '<p class="help bad">Lists aren’t switched on yet — Sam needs to publish the new database rules (see the README).</p>'; return; }
+  const t = S.listTab;
+  const items = S.items.filter((i) => i.list === t).sort((a, b) => (a.at || 0) - (b.at || 0));
+  const open = items.filter((i) => !itemDone(i)), done = items.filter(itemDone);
+  const row = (i) => `<div class="item ${itemDone(i) ? 'done' : ''}" data-item="${esc(i.id)}">
+      <button class="tick" aria-label="${itemDone(i) ? 'Not done' : 'Done'}">${itemDone(i) ? '✓' : ''}</button>
+      <span class="txt">${esc(i.text)}${t === 'todo' && (i.who || i.repeat) ? `<small>${[i.who, REPEAT_CHORE[i.repeat || ''] !== 'Once' ? REPEAT_CHORE[i.repeat] : ''].filter(Boolean).map(esc).join(' · ')}</small>` : ''}</span>
+      <button class="btn icon ghost rm" aria-label="Delete">✕</button></div>`;
+  const groups = t === 'todo'
+    ? [...new Set(open.map((i) => i.who || ''))].sort((a, b) => (a === '') - (b === '') || WHO().indexOf(a) - WHO().indexOf(b))
+      .map((w) => `<h4>${esc(w || 'Anyone')}</h4>${open.filter((i) => (i.who || '') === w).map(row).join('')}`).join('')
+    : open.map(row).join('');
+  const clearable = done.filter((i) => !i.repeat);
+  box.innerHTML = (open.length ? groups : `<p class="muted">${t === 'shop' ? 'Nothing on the list.' : 'No chores right now. 🎉'}</p>`)
+    + (done.length ? `<details class="donebox" ${t === 'shop' ? 'open' : ''}><summary>${done.length} done</summary>${done.map(row).join('')}
+      ${clearable.length ? `<div class="actions"><button class="btn" id="clearDone">Clear ${t === 'shop' ? 'checked items' : 'finished to-dos'}</button></div>` : ''}</details>` : '');
+  $$('.item', box).forEach((el) => {
+    const i = S.items.find((x) => x.id === el.dataset.item);
+    $('.tick', el).onclick = async () => {
+      const nowDone = !itemDone(i);
+      const up = i.repeat ? { ...i, doneOn: nowDone ? todayWall() : null, by: myName() || i.by || '' } : { ...i, done: nowDone, doneOn: nowDone ? todayWall() : null };
+      S.items = S.items.map((x) => (x.id === i.id ? up : x)); drawLists();
+      try { await cloud.putItem(S.space, up); } catch (err) { listErr(err); }
+    };
+    $('.rm', el).onclick = async () => {
+      S.items = S.items.filter((x) => x.id !== i.id); drawLists();
+      try { await cloud.delItem(S.space, i.id); } catch (err) { listErr(err); }
+    };
+  });
+  if ($('#clearDone')) $('#clearDone').onclick = async () => {
+    const ids = new Set(clearable.map((i) => i.id));
+    S.items = S.items.filter((x) => !ids.has(x.id)); drawLists();
+    try { for (const id of ids) await cloud.delItem(S.space, id); } catch (err) { listErr(err); }
+  };
+}
+
+/* ---------- phone notifications (sent by the GitHub Action, see scripts/notify.mjs) ---------- */
+const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && 'ontouchend' in document);
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const REMIND = { 0: 'No reminders', 30: '30 minutes before', 60: '1 hour before', 120: '2 hours before', 1440: 'The day before' };
+async function subHash(endpoint) {
+  const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(endpoint));
+  return [...new Uint8Array(b)].slice(0, 16).map((x) => x.toString(16).padStart(2, '0')).join('');
+}
+const b64ToBytes = (b) => Uint8Array.from(atob(b.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (b.length % 4)) % 4)), (c) => c.charCodeAt(0));
+
+const swReady = () => Promise.race([navigator.serviceWorker.ready, new Promise((_, rej) => setTimeout(() => rej(new Error('The app is still installing — close Settings and try again in a moment.')), 4000))]);
+async function currentPush() {
+  if (!pushSupported()) return null;
+  const reg = await swReady();
+  const sub = await reg.pushManager.getSubscription();
+  if (!sub) return null;
+  const id = await subHash(sub.endpoint);
+  const doc = await cloud.getPush(S.space, id).catch(() => null);
+  return doc ? { id, sub, doc } : { id, sub, doc: null };
+}
+
+async function drawPush() {
+  const box = $('#pushBox');
+  if (!box) return;
+  if (!pushSupported() || (isIOS && !isStandalone())) {
+    box.innerHTML = `<p class="help">${isIOS ? 'On iPhone, notifications only work from the Home Screen app: in Safari tap <b>Share → Add to Home Screen</b>, open the calendar from that icon, then come back here.' : 'This browser can’t show notifications. Try Chrome, or add the calendar to your Home Screen.'}</p>`;
+    return;
+  }
+  const cur = await currentPush().catch(() => null);
+  const on = cur?.doc && Notification.permission === 'granted';
+  if (!on) {
+    box.innerHTML = `<p class="help">Get a heads-up before games and events, when a time or place changes, and a Sunday-night look at the week.</p>
+      ${Notification.permission === 'denied' ? '<p class="help bad">Notifications are blocked for this app. Turn them on in your phone’s Settings → Notifications, then try again.</p>' : ''}
+      <div class="actions stack"><button class="btn primary" id="pushOn">🔔 Turn on notifications</button></div>`;
+    $('#pushOn').onclick = () => turnOnPush().catch((err) => toast(err.message, 6000));
+    return;
+  }
+  const d = cur.doc;
+  box.innerHTML = `<p class="help">✓ On for this phone.</p>
+    <label class="f">Reminders</label><select class="in" id="pRemind">${Object.entries(REMIND).map(([k, v]) => `<option value="${k}" ${+k === +(d.remind ?? 60) ? 'selected' : ''}>${v}</option>`).join('')}</select>
+    <label class="f">Only for</label><select class="in" id="pKid"><option value="">Everyone</option>${kidsList().map((k) => `<option ${d.kid === k ? 'selected' : ''}>${esc(k)}</option>`).join('')}</select>
+    <label class="check"><input type="checkbox" id="pChanges" ${d.changes !== false ? 'checked' : ''}> When a time or place changes, or something’s cancelled</label>
+    <label class="check"><input type="checkbox" id="pWeekly" ${d.weekly !== false ? 'checked' : ''}> Sunday night: the week ahead</label>
+    <label class="check"><input type="checkbox" id="pPrac" ${d.practices ? 'checked' : ''}> Include practices</label>
+    <p class="help">Sent from the calendar’s server, which checks every few minutes — a reminder can land a little early or late.</p>
+    <div class="actions"><button class="btn" id="pushOff">Turn off</button></div>`;
+  const save = async () => {
+    const up = { ...d, remind: +$('#pRemind').value, kid: $('#pKid').value, changes: $('#pChanges').checked, weekly: $('#pWeekly').checked, practices: $('#pPrac').checked, at: Date.now() };
+    try { await cloud.putPush(S.space, cur.id, up); toast('Saved'); } catch (err) { toast(err.message, 5000); }
+  };
+  ['#pRemind', '#pKid', '#pChanges', '#pWeekly', '#pPrac'].forEach((q) => ($(q).onchange = save));
+  $('#pushOff').onclick = async () => {
+    try { await cloud.delPush(S.space, cur.id); await cur.sub.unsubscribe(); toast('Notifications off'); drawPush(); } catch (err) { toast(err.message, 5000); }
+  };
+}
+
+async function turnOnPush() {
+  const key = (await readRaw('data/vapid-public.txt') || '').trim();
+  if (!key) throw new Error('Notifications are still being set up — try again in an hour.');
+  if (await Notification.requestPermission() !== 'granted') { drawPush(); return; }
+  const reg = await swReady();
+  let sub = await reg.pushManager.getSubscription();
+  sub ||= await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(key) });
+  const id = await subHash(sub.endpoint);
+  const name = myName() || (isEditor() ? (S.user?.name || '').split(' ')[0] : '');
+  try {
+    await cloud.putPush(S.space, id, { sub: JSON.parse(JSON.stringify(sub)), name, editor: isEditor(), email: isEditor() ? S.user.email : '', remind: 60, changes: true, weekly: true, practices: showPractices(), kid: '', at: Date.now() });
+  } catch (err) {
+    throw new Error(/permission/i.test(err.code || err.message) ? 'Notifications aren’t switched on yet — Sam needs to update the database rules (see the README).' : err.message);
+  }
+  toast('🔔 Notifications on', 3000);
+  drawPush();
+}
+
+/* ---------- weekly email to relatives (editors only) ---------- */
+async function drawDigest() {
+  const box = $('#digestBox');
+  if (!box) return;
+  let d = null;
+  try { d = await cloud.getPrivate(S.space, 'digest'); } catch (err) {
+    box.innerHTML = `<p class="help bad">${/permission/i.test(err.code || err.message) ? 'Not switched on yet — publish the new database rules (see the README).' : esc(err.message)}</p>`; return;
+  }
+  d ||= {};
+  box.innerHTML = `<p class="help">Every Sunday evening, an email with the week’s games, concerts, church and school events (no practices, nothing 🔒) goes to these addresses.</p>
+    <label class="f">Send to <span class="muted">(one email per line)</span></label>
+    <textarea class="in" id="dgTo" style="min-height:90px" placeholder="grandma@example.com">${esc((d.emails || []).join('\n'))}</textarea>
+    <label class="f">Send from Gmail</label><input class="in" id="dgFrom" type="email" value="${esc(d.from || S.user?.email || '')}">
+    <label class="f">Gmail app password ${d.appPassword ? '<span class="muted">(saved — leave blank to keep it)</span>' : ''}</label>
+    <input class="in" id="dgPass" type="password" autocomplete="off" placeholder="16 letters from myaccount.google.com/apppasswords">
+    <details class="help"><summary>How do I get an app password?</summary><p>Go to <b>myaccount.google.com/apppasswords</b> (2-Step Verification has to be on), type a name like “Family calendar”, tap Create, and paste the 16 letters here. It’s only readable by you and Emily.</p></details>
+    <label class="check"><input type="checkbox" id="dgOn" ${d.on !== false ? 'checked' : ''}> Send it every Sunday</label>
+    <div class="actions"><button class="btn primary" id="dgSave">Save</button></div>`;
+  $('#dgSave').onclick = async () => {
+    const emails = [...new Set($('#dgTo').value.split(/[\s,;]+/).map((x) => x.trim().toLowerCase()).filter(Boolean))];
+    const bad = emails.filter((x) => !/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/.test(x));
+    if (bad.length) return toast(`Check this address: ${bad[0]}`, 4000);
+    const pass = $('#dgPass').value.replace(/\s/g, '');
+    if (emails.length && !pass && !d.appPassword) return toast('Add a Gmail app password so the email can be sent', 4000);
+    try {
+      await cloud.putPrivate(S.space, 'digest', { emails, from: $('#dgFrom').value.trim().toLowerCase(), on: $('#dgOn').checked, ...(pass ? { appPassword: pass } : {}) });
+      toast(emails.length ? `Weekly email will go to ${emails.length} ${emails.length === 1 ? 'person' : 'people'}` : 'Saved');
+      drawDigest();
+    } catch (err) { toast(err.message, 5000); }
+  };
+}
+
 /* ---------- settings ---------- */
 function feedStatus(c) {
   if (!c.feedUrl) return '';
@@ -1560,7 +1769,7 @@ function openSettings() {
     <div class="head"><div><h2>Settings</h2>${S.user ? `<p class="help">Signed in as ${esc(S.user.email)}${ed ? ' · editor' : ''}</p>` : ''}</div><button class="btn icon ghost" data-close aria-label="Close">✕</button></div>
 
     ${ed ? `<h4>Invite family</h4>
-    <p class="help">Copies a ready-to-send text with the link, the family code and how to add it to their Home Screen. They see sports, school and church (not the Family calendar or anything 🔒), and can add their own events.</p>
+    <p class="help">Copies a ready-to-send text with the link, the family code and how to add it to their Home Screen. They see games, concerts, school and church (not practices unless they switch them on, the Family calendar or anything 🔒), and can add their own events.</p>
     <div class="actions stack"><button class="btn primary big" id="copyInvite">📋 Copy invite message</button></div>
     <label class="f">Family code</label>
     <div class="two"><input class="in" id="famCode" value="${esc(S.cal.familyCode || 'Ahlersmeyer')}" autocomplete="off"><button class="btn" id="saveCode">Save code</button></div>
@@ -1583,12 +1792,20 @@ function openSettings() {
       <p>Paste it on the calendar it belongs to and tap Save. Games show up within 30 minutes and stay up to date.</p>
     </details>` : ''}
 
+    <h4>Notifications</h4>
+    <div id="pushBox"><p class="help">Checking this phone…</p></div>
+
+    ${ed ? `<h4>Weekly email</h4>
+    <div id="digestBox"><p class="help">Loading…</p></div>` : ''}
+
     <h4>Text size</h4>
     <div class="seg"><button data-size="" class="${!store.get('textSize') ? 'on' : ''}">Normal</button><button data-size="big" class="${store.get('textSize') === 'big' ? 'on' : ''}">Larger</button><button data-size="huge" class="${store.get('textSize') === 'huge' ? 'on' : ''}">Largest</button></div>
 
     <h4>${S.user ? 'Account' : 'Sam or Emily?'}</h4>
     <div class="actions">${S.user ? `<button class="btn" id="signOut">Sign out</button>` : `<button class="btn primary" id="signIn">Sign in with Google</button>`}</div>`);
   $('[data-close]', sh).onclick = closeModal;
+  drawPush();
+  if (ed) drawDigest();
   $$('[data-size]', sh).forEach((b) => (b.onclick = () => { store.set('textSize', b.dataset.size || null); applyTextSize(); closeModal(); openSettings(); }));
   if ($('#signIn')) $('#signIn').onclick = () => { closeModal(); cloud.signIn().catch((e) => toast(e.message, 6000)); };
   if ($('#signOut')) $('#signOut').onclick = async () => {
@@ -1611,7 +1828,7 @@ Put it on your Home Screen so it's one tap away:
 • iPhone: open the link in Safari → tap the Share button (square with the arrow) → "Add to Home Screen" → Add
 • Android: open the link in Chrome → tap ⋮ (top right) → "Add to Home screen" → Add
 
-You'll see the kids' games, school and church events with times, places and directions. Have a birthday, dinner or visit coming up? Tap "+ Add" to put it on the calendar for everyone.
+You'll see the kids' games, concerts, school and church events with times, places and directions. Have a birthday, dinner or visit coming up? Tap "+ Add" to put it on the calendar for everyone.
 
 — Sam & Emily`;
   const ensureCode = async (code) => {

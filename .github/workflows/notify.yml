@@ -1,0 +1,60 @@
+name: Notifications
+
+# Reminders, change alerts and the Sunday "week ahead" (scripts/notify.mjs).
+# GitHub runs scheduled jobs a few minutes late at busy times, so reminders can be a little off.
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+    inputs:
+      force_weekly:
+        description: 'Send the week-ahead summary now (notifications + email)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: write   # save the "already sent" list in the Actions cache
+
+concurrency:
+  group: notify
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install push + email helpers
+        run: npm install --no-save --no-package-lock --no-audit --no-fund web-push@3.6.7 nodemailer@6.9.16
+      - name: Restore what was already sent
+        uses: actions/cache/restore@v4
+        with:
+          path: notify-state.enc
+          key: notify-state-${{ github.run_id }}
+          restore-keys: notify-state-
+      - name: Send notifications
+        run: node scripts/notify.mjs
+        env:
+          CAL_PASSCODE: ${{ secrets.CAL_PASSCODE }}
+          GOOGLE_SA_KEY: ${{ secrets.GOOGLE_SA_KEY }}
+          FORCE_WEEKLY: ${{ inputs.force_weekly && '1' || '' }}
+      - name: Remember what was sent
+        if: always() && hashFiles('notify-state.enc') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: notify-state.enc
+          key: notify-state-${{ github.run_id }}
+      - name: Save new push keys (first run only)
+        run: |
+          git add data/vapid.enc data/vapid-public.txt 2>/dev/null || true
+          if git diff --cached --quiet; then exit 0; fi
+          git config user.name "calendar-bot"
+          git config user.email "calendar-bot@users.noreply.github.com"
+          git commit -m "Notification keys"
+          git pull --rebase
+          git push
