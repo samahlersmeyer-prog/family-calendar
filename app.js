@@ -1,10 +1,10 @@
-import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=22';
-import { parseICS, hashId } from './lib/ics.js?v=22';
-import { parseScheduleText } from './lib/schedule-text.js?v=22';
-import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=22';
-import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT } from './lib/mail-filter.js?v=22';
-import { initCloud } from './lib/cloud.js?v=22';
-import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=22';
+import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=23';
+import { parseICS, hashId } from './lib/ics.js?v=23';
+import { parseScheduleText } from './lib/schedule-text.js?v=23';
+import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=23';
+import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT } from './lib/mail-filter.js?v=23';
+import { initCloud } from './lib/cloud.js?v=23';
+import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=23';
 
 /* ---------- config ---------- */
 const CONFIG = { owner: 'samahlersmeyer-prog', repo: 'family-calendar', branch: 'main' };
@@ -1351,9 +1351,22 @@ const CAL_HINTS = [
   [/church|choir|\bsing|sunday school|christmas program|chapel|worship|\bvbs\b|youth group/, 'church'],
   [/school|holy cross|field trip|\bband\b|concert|teacher|homeroom|classroom|\bgrade\b|factsmgt|renweb|picture day|conferences?|clhscadets|concordia/, 'school'],
 ];
+// Whose team it is, from the coach or the grade: Troy Chapman coaches Theo, Scott Sector coaches Max.
+const KID_HINTS = [[/troy chapman|\b(5th|fifth) grade/, 'Theo'], [/scott sector|\b(8th|eighth) grade/, 'Max']];
 function guessCalText(t) {
   t = t.toLowerCase();
-  for (const [re, id] of CAL_HINTS) if (re.test(t) && S.cal.calendars.some((c) => c.id === id)) return id;
+  const kid = (KID_HINTS.find(([re]) => re.test(t)) || [])[1];
+  for (const [re, id] of CAL_HINTS) {
+    if (!re.test(t) || !S.cal.calendars.some((c) => c.id === id)) continue;
+    const c = calById(id);
+    if (kid && calKid(c) && calKid(c) !== kid) {
+      // e.g. "basketball" points at Max's team, but this is Theo's: use Theo's calendar for that sport, or any of Theo's
+      const sport = (t.match(re) || [''])[0];
+      const mine = S.cal.calendars.filter((x) => calKid(x) === kid);
+      return (mine.find((x) => x.name.toLowerCase().includes(sport)) || mine[0] || { id: 'family' }).id;
+    }
+    return id;
+  }
   const hit = S.cal.calendars.find((c) => c.id !== 'family' && t.includes(c.name.toLowerCase()));
   return hit?.id || 'family';
 }
@@ -1379,7 +1392,9 @@ async function extractMail(m, token) {
   const guess = guessCalText(`${subject} ${from} ${body.slice(0, 800)}`);
   const bulk = !!(h['list-unsubscribe'] || /bulk|list/i.test(h.precedence || ''));
   const mail = classifyMail({ subject, from, body, bulk, hasInvite: items.length > 0 });
-  if (!items.length && !mail.junk) {
+  // Team-app notices ("Troy Chapman posted in 5th Grade Boys Basketball", "new message in…") aren't events themselves.
+  const notice = /\b(posted|commented|replied|reacted) (in|on|to)\b|\bliked your\b|\bsent (you )?a message\b|\bnew (message|post|comment)s? in\b|\bmentioned you\b/i.test(subject);
+  if (!items.length && !mail.junk && !notice) {
     const today = todayWall(), keys = new Set();
     const cleanSubject = subject.replace(/^((re|fwd?|fw):\s*)+/i, '').slice(0, 70);
     const sent = h.date ? new Date(h.date) : null;

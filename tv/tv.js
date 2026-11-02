@@ -1,10 +1,10 @@
 // Kitchen display: a big, glanceable, always-updating view for the Echo Show (or any tablet/TV).
 // Open https://samahlersmeyer-prog.github.io/family-calendar/tv/ and enter the family code once.
 // Shows what relatives see; sign in as Sam or Emily to include the Family calendar and 🔒 events too.
-import { initCloud } from '../lib/cloud.js?v=22';
-import { decryptJSON } from '../lib/crypto.js?v=22';
-import { expandAll, kindOf } from '../lib/events.js?v=22';
-import { todayWall, utcToWall, addDays, addMinutes, diffMinutes, dow } from '../lib/tz.js?v=22';
+import { initCloud } from '../lib/cloud.js?v=23';
+import { decryptJSON } from '../lib/crypto.js?v=23';
+import { expandAll, kindOf } from '../lib/events.js?v=23';
+import { todayWall, utcToWall, addDays, addMinutes, diffMinutes, dow } from '../lib/tz.js?v=23';
 
 const RAW = 'https://raw.githubusercontent.com/samahlersmeyer-prog/family-calendar/main/';
 const FRIENDS = { id: 'friends', name: 'Family & Friends', color: '#0891b2' };
