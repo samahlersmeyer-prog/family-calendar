@@ -4,6 +4,7 @@ import { parseScheduleText } from './lib/schedule-text.js?v=19';
 import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=19';
 import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT } from './lib/mail-filter.js?v=19';
 import { initCloud } from './lib/cloud.js?v=19';
+import { REPEATS, occurrences, mergeFeeds } from './lib/events.js?v=19';
 
 /* ---------- config ---------- */
 const CONFIG = { owner: 'samahlersmeyer-prog', repo: 'family-calendar', branch: 'main' };
@@ -269,38 +270,7 @@ function forKid(e, k) {
   return !titleKid(e.title); // family-wide things (no school, family dinner) show for everyone
 }
 
-/* repeating events */
-const REPEATS = { week: 'Every week', '2weeks': 'Every 2 weeks', weekdays: 'Every weekday (Mon–Fri)', day: 'Every day', month: 'Every month (same date)' };
-function nthDate(d0, every, i) {
-  if (every === 'week') return addDays(d0, 7 * i);
-  if (every === '2weeks') return addDays(d0, 14 * i);
-  if (every === 'month') {
-    const [y, m, dd] = d0.split('-').map(Number);
-    const dt = new Date(Date.UTC(y, m - 1 + i, 1));
-    const c = `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dd)}`;
-    return validDate(c) ? c : null; // no Feb 30th
-  }
-  return addDays(d0, i);
-}
-function occurrences(e) {
-  const r = e.repeat;
-  if (!r || !REPEATS[r.every]) return [e];
-  const d0 = e.start.slice(0, 10), t = e.start.slice(10);
-  const len = e.end ? diffMinutes(e.start, e.end) : null;
-  const last = addDays(d0, 730);
-  const until = r.until && r.until >= d0 ? (r.until < last ? r.until : last) : addDays(todayWall(), 400) < last ? addDays(todayWall(), 400) : last;
-  const skip = new Set(r.skip || []);
-  const out = [];
-  for (let i = 0; i < 800; i++) {
-    const d = nthDate(d0, r.every, i);
-    if (d === null) continue;
-    if (d > until) break;
-    if (skip.has(d) || (r.every === 'weekdays' && (dow(d) === 0 || dow(d) === 6))) continue;
-    const start = d + t;
-    out.push({ ...e, id: i === 0 ? e.id : `${e.id}~${d}`, seriesId: e.id, occ: d, start, end: len === null ? e.end : addMinutes(start, len) });
-  }
-  return out;
-}
+/* repeating events: lib/events.js */
 const repeatLabel = (r) => (r && REPEATS[r.every] ? REPEATS[r.every] + (r.until ? ` until ${fmtDay(r.until)}` : '') : '');
 const MAYBE_RE = /^\s*(maybe\b|if\b|possible\b)|\bif (they|we|he|she) (win|lose|advance|qualify)/i;
 
@@ -364,23 +334,8 @@ function dupMap(evs) {
 function allEvents() {
   const seen = new Set();
   const out = [];
-  // A team-feed game that matches a game already on the same calendar that day is merged into it:
-  // the feed's time and place win (so changes flow in), the event keeps its title, notes and attachments.
-  const manual = new Map();
-  for (const e of S.cal.events) if (!e.allDay && !e.repeat && !/practice|indoor/i.test(e.title)) manual.set(e.cal + '|' + e.start.slice(0, 10), e);
-  const merged = new Map();
-  const feeds = [];
-  for (const f of S.feeds.events || []) {
-    const m = !f.allDay && manual.get(f.cal + '|' + f.start.slice(0, 10));
-    if (m) {
-      // Keep our full address unless the team app points somewhere else (compare street numbers + names)
-      const fl = (f.location || '').replace(/\s*\n\s*/g, ', ').trim();
-      const street = fl.split(',')[0].toLowerCase();
-      const location = !fl || (m.location || '').toLowerCase().includes(street) ? m.location : fl;
-      merged.set(m.id, { ...m, start: f.start, end: f.end, location, feedId: f.id });
-    }
-    else feeds.push(f);
-  }
+  // Team-feed games that match an event already on the calendar are merged into it (lib/events.js).
+  const { merged, feeds } = mergeFeeds(S.cal.events, S.feeds.events);
   const live = new Set(S.cal.events.map((e) => e.id));
   const myWaiting = isEditor() ? [] : JSON.parse(store.get('myPending') || '[]').filter((e) => !live.has(e.id) && (e.end || e.start) >= todayWall());
   for (const e0 of [...S.cal.events.filter((e) => !e.pending).flatMap(occurrences), ...myWaiting, ...feeds, ...(S.inbox.events || [])]) {
@@ -1560,6 +1515,9 @@ function openSettings() {
     <label class="f">Family code</label>
     <div class="two"><input class="in" id="famCode" value="${esc(S.cal.familyCode || 'Ahlersmeyer')}" autocomplete="off"><button class="btn" id="saveCode">Save code</button></div>
     <details class="help"><summary>Show QR code / link only</summary><div id="qr" class="qr"></div><div class="actions"><button class="btn" id="copyFamily">Copy link only</button></div></details>
+
+    <h4>Kitchen display</h4>
+    <p class="help">A big always-on view for the Echo Show (or any tablet). On the Echo say <b>“Alexa, open Silk Browser”</b>, go to <b>${esc(location.host + location.pathname.replace(/[^/]*$/, ''))}tv</b> and enter the family code. Tap the screen once to go full screen. Sign in there to include the Family calendar too.</p>
 
     <h4>Editors</h4>
     <p class="help">These Google accounts can add, change and delete anything, and scan their email.</p>

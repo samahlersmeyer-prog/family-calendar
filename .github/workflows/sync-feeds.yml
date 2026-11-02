@@ -35,3 +35,10 @@ jobs:
           git commit -m "Sync team feeds"
           git pull --rebase
           git push
+      - name: Copy to Google Calendar (for Alexa / Echo Show)
+        continue-on-error: true
+        run: node scripts/sync-google.mjs
+        env:
+          CAL_PASSCODE: ${{ secrets.CAL_PASSCODE }}
+          GOOGLE_SA_KEY: ${{ secrets.GOOGLE_SA_KEY }}
+          GOOGLE_CALENDAR_ID: ${{ secrets.GOOGLE_CALENDAR_ID }}
