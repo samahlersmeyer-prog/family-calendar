@@ -1,10 +1,10 @@
-import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=24';
-import { parseICS, hashId } from './lib/ics.js?v=24';
-import { parseScheduleText } from './lib/schedule-text.js?v=24';
-import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=24';
-import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=24';
-import { initCloud } from './lib/cloud.js?v=24';
-import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=24';
+import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=25';
+import { parseICS, hashId } from './lib/ics.js?v=25';
+import { parseScheduleText } from './lib/schedule-text.js?v=25';
+import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=25';
+import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=25';
+import { initCloud } from './lib/cloud.js?v=25';
+import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=25';
 
 /* ---------- config ---------- */
 const CONFIG = { owner: 'samahlersmeyer-prog', repo: 'family-calendar', branch: 'main' };
@@ -903,7 +903,7 @@ function openEdit(e, day) {
     <form id="ef">
       <label class="dropzone smart" id="smartZone"><input type="file" id="smartFile" accept=".ics,.ical,.pdf,image/*,text/calendar" hidden>
         <b>📎 Drop or choose a flyer, PDF, screenshot or invite</b><br><span class="help">I’ll read it and fill in the details below</span></label>
-      ${isNew ? `<button type="button" class="btn" id="pasteBtn" style="width:100%;margin-top:8px">📋 Paste from an email or text</button>
+      ${isNew ? `<button type="button" class="btn" id="pasteBtn" style="width:100%;margin-top:8px">📋 Paste a screenshot or text</button>
       <div id="pasteBox" class="hidden"><textarea class="in" id="pasteText" style="min-height:90px;margin-top:8px" placeholder="Paste the email or message here"></textarea>
         <div class="actions" style="margin-top:6px"><button type="button" class="btn primary" id="pasteGo">Fill it in</button></div></div>` : ''}
       <div id="smartStatus" class="help"></div>
@@ -950,12 +950,15 @@ function openEdit(e, day) {
     };
     $('#pasteBtn').onclick = async () => {
       // Try the clipboard straight away (iPhone shows a small "Paste" bubble); fall back to a box to paste into.
-      let t = '';
-      try { t = await navigator.clipboard.readText(); } catch {}
-      if (t && t.trim().length > 8) return fromPaste(t);
+      const c = await readClipboard();
+      if (c.file) { $('#pasteBox').classList.add('hidden'); return smartFill(c.file, f, pending, showNew); }
+      const t = c.text || '';
+      if (t.trim().length > 8) return fromPaste(t);
       $('#pasteBox').classList.remove('hidden'); $('#pasteText').focus();
     };
     $('#pasteGo').onclick = () => fromPaste($('#pasteText').value);
+    // a picture pasted into the box (long-press → Paste) gets read too
+    $('#pasteText').addEventListener('paste', (ev) => { const img = pastedImage(ev); if (img) { ev.preventDefault(); $('#pasteBox').classList.add('hidden'); smartFill(img, f, pending, showNew); } });
     // "Andrew Peterson concert Fri Dec 4 7:30pm at Blue Gate" → title, date, time and place
     let touched = false;
     f.date.addEventListener('input', () => (touched = true));
@@ -1247,14 +1250,28 @@ function guessCal(name) {
   return hit?.id || store.get('lastCal') || 'family';
 }
 
+/** What's on the clipboard: a copied screenshot/photo (as a file) or text. iPhone shows a small "Paste" bubble first. */
+async function readClipboard() {
+  try {
+    for (const item of await navigator.clipboard.read()) {
+      const img = item.types.find((t) => t.startsWith('image/'));
+      if (img) { const b = await item.getType(img); return { file: new File([b], 'Screenshot.' + (img.split('/')[1] || 'png'), { type: img }) }; }
+      if (item.types.includes('text/plain')) return { text: await (await item.getType('text/plain')).text() };
+    }
+  } catch {}
+  try { return { text: await navigator.clipboard.readText() }; } catch { return {}; }
+}
+const pastedImage = (e) => [...(e.clipboardData?.files || [])].find((f) => f.type.startsWith('image/'));
+
 function openImport(files, tab = 'file') {
   const sh = openModal(`
     <div class="head"><div><h2>Import events</h2><p class="help">Invites, schedule PDFs, flyers, photos and screenshots — or text copied from an email or team website.</p></div>
       <button class="btn icon ghost" data-close aria-label="Close">✕</button></div>
     <div class="seg"><button data-tab="file">File</button><button data-tab="text">Paste text</button><button data-tab="email">Email</button></div>
     <div data-pane="file"><label class="dropzone"><input type="file" id="files" accept=".ics,.ical,.ifb,.pdf,text/calendar,application/pdf,image/*" multiple hidden>
-      <b>Tap to choose files or take a photo</b><br>Calendar invites, schedule PDFs, flyers, screenshots, or a photo of a printed calendar</label></div>
-    <div data-pane="text" class="hidden"><textarea class="in" id="paste" placeholder="Paste a schedule — one game or practice per line works best"></textarea>
+      <b>Tap to choose files or take a photo</b><br>Calendar invites, schedule PDFs, flyers, screenshots, or a photo of a printed calendar</label>
+      <button type="button" class="btn" id="pasteShot" style="width:100%;margin-top:8px">📋 Paste a copied screenshot</button></div>
+    <div data-pane="text" class="hidden"><textarea class="in" id="paste" placeholder="Paste a schedule or a screenshot — one game or practice per line works best"></textarea>
       <div class="actions"><button class="btn primary" id="findText">Find events</button></div></div>
     <div data-pane="email" class="hidden">${emailPane()}</div>
     <div id="review" class="review"></div>`);
@@ -1269,8 +1286,16 @@ function openImport(files, tab = 'file') {
   showTab(tab);
   if ($('#scanBtn', sh)) $('#scanBtn', sh).onclick = startEmailScan;
   $('#files', sh).onchange = (e) => handleFiles([...e.target.files]);
+  $('#pasteShot', sh).onclick = async () => {
+    const c = await readClipboard();
+    if (c.file) return handleFiles([c.file]);
+    if (c.text?.trim()) { showTab('text'); $('#paste').value = c.text; return $('#findText').click(); }
+    toast('Nothing to paste — take a screenshot, tap it, then Copy (or “Copy and Delete”)', 5000);
+  };
+  $('#paste', sh).addEventListener('paste', (ev) => { const img = pastedImage(ev); if (img) { ev.preventDefault(); handleFiles([img]); } });
   $('#findText', sh).onclick = () => {
-    const rows = parseScheduleText($('#paste').value);
+    const t = $('#paste').value.replace(/^(\s*>)+\s?/gm, '');
+    const rows = mergeRows(parseScheduleText(splitSentences(t), { base: todayWall() }));
     renderReview({ textRows: rows, label: 'Pasted text', cal: store.get('lastCal') || 'family' });
   };
   if (files?.length) handleFiles(files);
@@ -1665,6 +1690,16 @@ addEventListener('drop', (e) => {
   if ($('#ef') && !$('#modal').classList.contains('hidden')) { $('#ef')._smart(files[0]); return; }
   if ($('#review') && !$('#modal').classList.contains('hidden')) handleFiles(files);
   else openImport(files);
+});
+
+addEventListener('paste', (e) => {
+  if (e.defaultPrevented || !S.cal || !isEditor()) return;
+  const img = pastedImage(e);
+  if (!img) return;
+  e.preventDefault();
+  if ($('#ef') && !$('#modal').classList.contains('hidden')) return $('#ef')._smart(img);
+  if ($('#review') && !$('#modal').classList.contains('hidden')) return handleFiles([img]);
+  openImport([img]);
 });
 
 /* ---------- lists: groceries and chores ---------- */
