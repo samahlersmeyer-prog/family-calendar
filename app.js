@@ -1,10 +1,10 @@
-import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=23';
-import { parseICS, hashId } from './lib/ics.js?v=23';
-import { parseScheduleText } from './lib/schedule-text.js?v=23';
-import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=23';
-import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT } from './lib/mail-filter.js?v=23';
-import { initCloud } from './lib/cloud.js?v=23';
-import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=23';
+import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=24';
+import { parseICS, hashId } from './lib/ics.js?v=24';
+import { parseScheduleText } from './lib/schedule-text.js?v=24';
+import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=24';
+import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=24';
+import { initCloud } from './lib/cloud.js?v=24';
+import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=24';
 
 /* ---------- config ---------- */
 const CONFIG = { owner: 'samahlersmeyer-prog', repo: 'family-calendar', branch: 'main' };
@@ -903,8 +903,12 @@ function openEdit(e, day) {
     <form id="ef">
       <label class="dropzone smart" id="smartZone"><input type="file" id="smartFile" accept=".ics,.ical,.pdf,image/*,text/calendar" hidden>
         <b>📎 Drop or choose a flyer, PDF, screenshot or invite</b><br><span class="help">I’ll read it and fill in the details below</span></label>
+      ${isNew ? `<button type="button" class="btn" id="pasteBtn" style="width:100%;margin-top:8px">📋 Paste from an email or text</button>
+      <div id="pasteBox" class="hidden"><textarea class="in" id="pasteText" style="min-height:90px;margin-top:8px" placeholder="Paste the email or message here"></textarea>
+        <div class="actions" style="margin-top:6px"><button type="button" class="btn primary" id="pasteGo">Fill it in</button></div></div>` : ''}
       <div id="smartStatus" class="help"></div>
-      <label class="f">What</label><input class="in" name="title" value="${esc(e.title)}" required placeholder="e.g. Theo practice">
+      <label class="f">What</label><input class="in" name="title" value="${esc(e.title)}" required placeholder="${isNew ? 'e.g. Theo practice Thu 6pm at Mad Apple' : 'e.g. Theo practice'}">
+      ${isNew ? '<p class="help">Type it like you’d text it — a day, time or “at” place fills in the boxes below.</p>' : ''}
       <div class="two"><div><label class="f">Calendar</label><select class="in" name="cal">${calOptions(e.cal)}</select></div>
         <div><label class="f">Type</label><select class="in" name="kind"><option value="">${esc(KINDS[kindOf({ title: e.title })])} (guess)</option>${Object.entries(KINDS).map(([k, v]) => `<option value="${k}" ${e.kind === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></div></div>
       <p class="help">Practices are hidden from extended family unless they switch them on.</p>
@@ -936,6 +940,37 @@ function openEdit(e, day) {
   f.files.onchange = showNew;
   $('#smartFile').onchange = (ev) => { if (ev.target.files[0]) smartFill(ev.target.files[0], f, pending, showNew); };
   f._smart = (file) => smartFill(file, f, pending, showNew);
+  if (isNew) {
+    const status = (t, bad) => { const el = $('#smartStatus'); el.textContent = t; el.classList.toggle('bad', !!bad); };
+    const fromPaste = (t) => {
+      if (!t.trim()) return status('Nothing to read — paste the email or message first.', true);
+      $('#pasteBox').classList.add('hidden');
+      fillFromText(t, f, status, 'what you pasted');
+      if (!f.notes.value.trim() || f.notes.value === t.replace(/\s+/g, ' ').trim().slice(0, 500)) f.notes.value = t.trim().slice(0, 1500);
+    };
+    $('#pasteBtn').onclick = async () => {
+      // Try the clipboard straight away (iPhone shows a small "Paste" bubble); fall back to a box to paste into.
+      let t = '';
+      try { t = await navigator.clipboard.readText(); } catch {}
+      if (t && t.trim().length > 8) return fromPaste(t);
+      $('#pasteBox').classList.remove('hidden'); $('#pasteText').focus();
+    };
+    $('#pasteGo').onclick = () => fromPaste($('#pasteText').value);
+    // "Andrew Peterson concert Fri Dec 4 7:30pm at Blue Gate" → title, date, time and place
+    let touched = false;
+    f.date.addEventListener('input', () => (touched = true));
+    f.title.addEventListener('change', () => {
+      const q = quickParse(f.title.value, f.date.value);
+      if (!q) return;
+      if (q.title) f.title.value = q.title;
+      if (q.date && !touched) { f.date.value = q.date; if (f.last) f.last.value = q.date; }
+      if (q.time) { f.allDay.checked = false; f.allDay.onchange(); f.st.value = q.time; f.et.value = q.endTime || ''; }
+      if (q.location && !f.location.value) f.location.value = q.location;
+      f.title.dispatchEvent(new Event('input'));
+      const g = guessCalText(f.title.value); if (g !== 'family' && [...f.cal.options].some((o) => o.value === g)) f.cal.value = g;
+      status(`✓ ${new Date(f.date.value + 'T12:00').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}${q.time ? ' at ' + fmtHM(q.time) : ''}${q.location ? ' · ' + q.location : ''} — check it and tap Save.`);
+    });
+  }
   // keep the "(guess)" label in step with the title
   f.title.addEventListener('input', () => { f.kind.options[0].textContent = KINDS[kindOf({ title: f.title.value })] + ' (guess)'; });
   f.rep.onchange = () => $('.untilw', f).classList.toggle('hidden', !f.rep.value);
@@ -1051,9 +1086,38 @@ const loadOCR = () => (ocrReady ||= new Promise((res, rej) => {
   sc.onload = () => res(window.Tesseract); sc.onerror = () => { ocrReady = null; rej(new Error('Couldn’t load the text reader')); };
   document.head.appendChild(sc);
 }));
+/* Tesseract reads dark-mode screenshots and small or dim photos badly. Give it a big, grey, high-contrast,
+   dark-text-on-light copy: scale to ~2000px wide, flip light-on-dark, and stretch the contrast. */
+async function prepForOcr(source) {
+  let img = source;
+  if (source instanceof Blob) img = await createImageBitmap(source).catch(() => null);
+  if (!img) return source;
+  const w0 = img.width, h0 = img.height;
+  const k = Math.min(3, Math.max(0.5, 2000 / Math.max(w0, 1)), 8000 / Math.max(h0, 1)); // ~2000px wide, never absurdly tall
+  const c = document.createElement('canvas');
+  c.width = Math.round(w0 * k); c.height = Math.round(h0 * k);
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.imageSmoothingQuality = 'high';
+  g.drawImage(img, 0, 0, c.width, c.height);
+  const d = g.getImageData(0, 0, c.width, c.height), px = d.data;
+  const hist = new Uint32Array(256);
+  for (let i = 0; i < px.length; i += 4) { const y = (px[i] * 299 + px[i + 1] * 587 + px[i + 2] * 114) / 1000 | 0; px[i] = y; hist[y]++; }
+  const n = px.length / 4, pct = (p) => { let a = 0; for (let v = 0; v < 256; v++) if ((a += hist[v]) >= n * p) return v; return 255; };
+  const lo = pct(0.02), hi = pct(0.98), mid = pct(0.5);
+  const dark = mid < 110; // dark mode: light text on a dark background
+  const span = Math.max(30, hi - lo);
+  for (let i = 0; i < px.length; i += 4) {
+    let y = Math.min(255, Math.max(0, (px[i] - lo) * 255 / span));
+    if (dark) y = 255 - y;
+    px[i] = px[i + 1] = px[i + 2] = y;
+  }
+  g.putImageData(d, 0, 0);
+  return c;
+}
 async function ocr(source, status) {
   const T = await loadOCR();
-  const r = await T.recognize(source, 'eng', { logger: (m) => { if (m.status === 'recognizing text') status(`Reading the picture… ${Math.round(m.progress * 100)}%`); } });
+  status?.('Reading the picture…');
+  const r = await T.recognize(await prepForOcr(source), 'eng', { logger: (m) => { if (m.status === 'recognizing text') status(`Reading the picture… ${Math.round(m.progress * 100)}%`); } });
   return gridFromOcr(r.data) || r.data.text || '';
 }
 async function pdfPageImage(file) {
@@ -1089,22 +1153,44 @@ async function smartFill(file, f, pending, showNew) {
       status('Reading the picture…');
       text = await ocr(file, status);
     } else return status('Drop a PDF, a picture or a calendar invite (.ics).', true);
+    if (fillFromText(text, f, status, file.name)) { pending.push(file); showNew(); }
+  } catch (err) { status(err.message, true); }
+}
 
+/** Fill the Add form from any text: OCR output, a PDF, or something pasted from an email or text. */
+function fillFromText(text, f, status, label = 'that') {
+  {
+    text = text.replace(/^(\s*>)+\s?/gm, '');
     const rows = mergeRows(parseScheduleText(splitSentences(gridToLines(text)), { base: todayWall() })).filter((r) => r.date >= todayWall());
-    if (rows.length > 3) return offerSchedule(f, rows.length, () => { openImport(); renderReview({ textRows: rows, label: file.name, cal: guessCalText(text) || 'family' }); });
+    if (rows.length > 3 && new Set(rows.map((r) => r.date + r.time)).size > 3) { offerSchedule(f, rows.length, () => { openImport(); renderReview({ textRows: rows, label, cal: guessCalText(text) || 'family' }); }); return false; }
     if (!rows.length) {
       status('I couldn’t find a date in it — fill in the details and it’ll be attached.', true);
     } else {
-      const best = rows.sort((a, b) => (!!b.time - !!a.time) || ((b.title || '').length - (a.title || '').length))[0];
+      const best = rows.sort((a, b) => (!!b.time - !!a.time) || (!!b.location - !!a.location) || ((b.title || '').length - (a.title || '').length))[0];
       const lines = text.split('\n').map((l) => l.trim()).filter((l) => l.length > 3 && l.length < 70 && !/^\d/.test(l) && !/\d{1,2}:\d{2}|\b\d{1,2}\s*[ap]m\b/i.test(l));
       const firstLine = lines.find((l) => EVENT.test(l)) || lines[0] || '';
       const words = (best.title || '').split(/\s+/).length;
       const title = best.title && best.title.length >= 3 && words <= 8 ? best.title : firstLine;
       setForm(f, { title, date: best.date, time: best.time || '', endTime: best.endTime || '', location: best.location || (text.match(ADDRESS) || [''])[0].trim(), notes: text.replace(/\s+/g, ' ').trim().slice(0, 500), guess: text });
-      status('✓ Filled in from ' + file.name + ' — check it and tap Save.');
+      if (TICKETS.test(text) && !f.kind.value && kindOf({ title }) === 'other') f.kind.value = 'program';
+      status('✓ Filled in from ' + label + ' — check it and tap Save.');
     }
-    pending.push(file); showNew();
-  } catch (err) { status(err.message, true); }
+    return true;
+  }
+}
+const fmtHM = (hm) => { const [h, m] = hm.split(':').map(Number); return `${h % 12 || 12}${m ? ':' + String(m).padStart(2, '0') : ''} ${h < 12 ? 'AM' : 'PM'}`; };
+/** One line typed like a text message → its parts, or null if there's no day or time in it. */
+const DAY_ABBR = { mon: 'monday', tue: 'tuesday', tues: 'tuesday', wed: 'wednesday', thu: 'thursday', thur: 'thursday', thurs: 'thursday', fri: 'friday', sat: 'saturday', sun: 'sunday' };
+function quickParse(line, fallbackDate) {
+  const t = line.trim().replace(/\b(mon|tues?|wed|thu(?:rs?)?|fri|sat|sun)\b\.?(?=\s|$)/gi, (m, d) => DAY_ABBR[d.toLowerCase()]);
+  if (t.length < 4) return null;
+  let loc = '';
+  const at = t.match(/\s(?:at|@)\s+(?![\d:]+\s*(?:am|pm|a|p)?\b)([A-Za-z][^,]{2,60})$/i);
+  const body = at ? t.slice(0, at.index) : t;
+  if (at) loc = at[1].trim();
+  const r = parseScheduleText(body, { base: todayWall() })[0] || (fallbackDate && parseScheduleText(fallbackDate + ' ' + body)[0]);
+  if (!r || (!r.time && !/\d|today|tonight|tomorrow|day\b/i.test(body))) return null;
+  return { title: (r.title || '').replace(/\s+(on|at)$/i, ''), date: r.date, time: r.time, endTime: r.endTime, location: loc || r.location };
 }
 function setForm(f, v) {
   if (v.title) { f.title.value = v.title; f.title.dispatchEvent(new Event('input')); }
@@ -1279,7 +1365,7 @@ function renderReview({ icsEvents = [], textRows = [], notes = [], label, cal })
 /* ---------- email scanning (Gmail, read-only, runs in the browser) ---------- */
 const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const GMAIL_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
-const MAIL_QUERY = '-category:promotions -category:social -category:forums -in:spam (filename:ics OR invite OR invitation OR schedule OR practice OR game OR games OR tournament OR rehearsal OR recital OR program OR concert OR party OR appointment OR "save the date" OR reminder OR choir OR sing OR singing OR "field trip" OR conference OR meet OR tryouts OR banquet OR birthday OR camp OR clinic OR snack OR snacks OR volunteer OR chaperone OR concessions OR signupgenius OR "signed up" OR "sign up" OR "your slot")';
+const MAIL_QUERY = '-category:promotions -category:social -category:forums -in:spam (filename:ics OR invite OR invitation OR schedule OR practice OR game OR games OR tournament OR rehearsal OR recital OR program OR concert OR party OR appointment OR "save the date" OR reminder OR choir OR sing OR singing OR "field trip" OR conference OR meet OR tryouts OR banquet OR birthday OR camp OR clinic OR snack OR snacks OR volunteer OR chaperone OR concessions OR signupgenius OR "signed up" OR "sign up" OR "your slot" OR ticket OR tickets OR admission OR performance OR theatre OR theater)';
 
 let gisReady;
 function loadGIS() {
@@ -1332,9 +1418,14 @@ function htmlToText(h) {
 }
 function trimBody(t) {
   const out = [];
+  // A forward ("---- Forwarded message ----") is the whole point of the email: keep its quoted text.
+  const fwd = /forwarded message|begin forwarded/i.test(t);
   for (let l of t.replace(/\r/g, '').split('\n')) {
-    if (/^\s*(On .{5,160} wrote:|-{2,}\s*Original Message)/i.test(l)) break; // quoted replies
-    if (/^\s*>/.test(l) || /^\s*(Sent from my|Unsubscribe|To unsubscribe)/i.test(l)) continue;
+    if (fwd) {
+      l = l.replace(/^(\s*>)+\s?/, '');
+      if (/^\s*(-{2,}\s*forwarded message|begin forwarded|(from|date|sent|to|cc|subject):\s)/i.test(l)) continue; // the forward's own header
+    } else if (/^\s*(On .{5,160} wrote:|-{2,}\s*Original Message)/i.test(l)) break; // quoted replies
+    if ((!fwd && /^\s*>/.test(l)) || /^\s*(Sent from my|Unsubscribe|To unsubscribe)/i.test(l)) continue;
     l = l.trim();
     if (!l) continue;
     out.push(...(l.length > 160 ? l.split(/(?<=[.!?])\s+/) : [l]));
@@ -1399,23 +1490,42 @@ async function extractMail(m, token) {
     const cleanSubject = subject.replace(/^((re|fwd?|fw):\s*)+/i, '').slice(0, 70);
     const sent = h.date ? new Date(h.date) : null;
     const base = sent && !isNaN(sent) ? utcToWall(sent).slice(0, 10) : undefined;
+    const seats = mail.ticket ? ticketNote(body) : '';
     for (const r of mergeRows(groupRows(parseScheduleText(splitSentences(cleanSubject + '\n\n' + body), { base }), cleanSubject))) {
       if (r.date < today || r.date > addDays(today, 400)) continue;
       const score = scoreRow(r, mail);
       if (score < KEEP_SCORE) continue;
       const k = r.date + '|' + r.time;
-      if (keys.has(k)) continue;
+      if (keys.has(k)) {
+        // a ticket repeats the show once per seat — the later copies often have the venue
+        const it = items.find((x) => x.kind === 'txt' && x.row.date + '|' + x.row.time === k);
+        if (it && !it.row.location && r.location) it.row.location = r.location;
+        continue;
+      }
       keys.add(k);
       const words = (r.title || '').split(/\s+/).length;
       const ownTitle = r.title && r.title.length >= 3 && words <= 12;
       // "dropping money to Ryan today" — a 'today/tomorrow' with no time, or a date with nothing to call it, isn't an event
       if (!r.time && (r.rel || !ownTitle)) continue;
       const title = ownTitle ? r.title : cleanSubject;
-      items.push({ kind: 'txt', score, row: { ...r, title } });
+      items.push({ kind: 'txt', score, row: { ...r, title, ...(seats ? { notes: seats } : {}), ...(mail.ticket && !r.kind ? { kind: kindOf({ title }) === 'other' ? 'program' : undefined } : {}) } });
       if (items.length >= 8) break;
     }
   }
   return { id: m.id, subject, from, items, guess, junk: mail.junk };
+}
+
+/** "Row F Seat 114" ×4 → "4 tickets · Row F, seats 114, 115, 116, 117" */
+function ticketNote(body) {
+  const rows = new Map();
+  for (const m of body.matchAll(/\brow\s+([a-z0-9]{1,3}),?\s+seat\s+(\d{1,4})\b/gi)) {
+    const r = m[1].toUpperCase();
+    if (!rows.has(r)) rows.set(r, new Set());
+    rows.get(r).add(m[2]);
+  }
+  const n = [...rows.values()].reduce((a, s) => a + s.size, 0);
+  if (!n) return '🎟 Tickets';
+  return `🎟 ${n} ticket${n === 1 ? '' : 's'} · ` + [...rows].map(([r, s]) => `Row ${r}, seat${s.size === 1 ? '' : 's'} ${[...s].join(', ')}`).join(' · ');
 }
 
 async function runEmailScan(token) {
@@ -1522,7 +1632,8 @@ function renderEmailReview(found, ids) {
       } else end = !time ? addDays(date, 1) : it.row.endTime && it.row.time === time ? `${date}T${it.row.endTime}` : addMinutes(start, 60);
       if (end <= start) end = addMinutes(start, 60);
       out.push({ id: hashId(calId + '|' + start + '|' + title), cal: calId, title, start, end, allDay: !time, location: v('location'),
-        notes: it.kind === 'ics' ? it.ev.notes : `${it.row.notes ? it.row.notes + '\n' : ''}From email: ${found[+row.dataset.m].subject} (${found[+row.dataset.m].from})`, source: 'email', createdAt: Date.now() });
+        notes: it.kind === 'ics' ? it.ev.notes : `${it.row.notes ? it.row.notes + '\n' : ''}From email: ${found[+row.dataset.m].subject} (${found[+row.dataset.m].from})`, source: 'email', createdAt: Date.now(),
+        ...(it.kind === 'txt' && it.row.kind ? { kind: it.row.kind } : {}) });
     }
     btn.disabled = true; btn.textContent = 'Saving…';
     try {
