@@ -1,10 +1,10 @@
-import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=25';
-import { parseICS, hashId } from './lib/ics.js?v=25';
-import { parseScheduleText } from './lib/schedule-text.js?v=25';
-import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=25';
-import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=25';
-import { initCloud } from './lib/cloud.js?v=25';
-import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=25';
+import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=26';
+import { parseICS, hashId } from './lib/ics.js?v=26';
+import { parseScheduleText } from './lib/schedule-text.js?v=26';
+import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=26';
+import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=26';
+import { initCloud } from './lib/cloud.js?v=26';
+import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=26';
 
 /* ---------- config ---------- */
 const CONFIG = { owner: 'samahlersmeyer-prog', repo: 'family-calendar', branch: 'main' };
@@ -1408,7 +1408,7 @@ function emailPane() {
   return `<p class="help" style="margin-top:14px">Looks through <b>your</b> Gmail for invites, schedules and events. Anything already on the calendar is left out, and nothing is added until you check it.</p>
     <label class="f">Look back</label>
     <select class="in" id="days">
-      ${[14, 30, 60, 90].map((d) => `<option value="${d}" ${d === 30 ? 'selected' : ''}>Last ${d} days</option>`).join('')}
+      ${[[1, 'Last day'], [3, 'Last 3 days'], [7, 'Last week'], [14, 'Last 2 weeks'], [30, 'Last month']].map(([d, t]) => `<option value="${d}" ${d === +(store.get('scanDays') || 7) ? 'selected' : ''}>${t}</option>`).join('')}
     </select>
     <div class="actions"><button class="btn primary" id="scanBtn">Sign in with Google &amp; scan</button></div>`;
 }
@@ -1427,8 +1427,16 @@ function startEmailScan() {
   client.requestAccessToken();
 }
 
-async function gm(path, token) {
-  const r = await fetch(GMAIL + path, { headers: { Authorization: 'Bearer ' + token } });
+async function gm(path, token, tries = 2) {
+  // A request that never answers used to freeze the whole scan: give each one 20 seconds, then try once more.
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 20000);
+  let r;
+  try { r = await fetch(GMAIL + path, { headers: { Authorization: 'Bearer ' + token }, signal: ctl.signal }); }
+  catch (e) {
+    if (tries > 1) return gm(path, token, tries - 1);
+    throw new Error(e.name === 'AbortError' ? 'Gmail took too long' : 'Couldn’t reach Gmail');
+  } finally { clearTimeout(timer); }
+  if ((r.status === 429 || r.status >= 500) && tries > 1) { await new Promise((ok) => setTimeout(ok, 1500)); return gm(path, token, tries - 1); }
   if (r.status === 401) throw new Error('Google sign-in expired — scan again.');
   if (r.status === 403) throw new Error('Gmail said no (403). Make sure the Gmail API is enabled and you’re a test user.');
   if (!r.ok) throw new Error('Gmail error ' + r.status);
@@ -1453,7 +1461,7 @@ function trimBody(t) {
     if ((!fwd && /^\s*>/.test(l)) || /^\s*(Sent from my|Unsubscribe|To unsubscribe)/i.test(l)) continue;
     l = l.trim();
     if (!l) continue;
-    out.push(...(l.length > 160 ? l.split(/(?<=[.!?])\s+/) : [l]));
+    out.push(...(l.length > 160 ? l.split(/(?<=[.!?])\s+/) : [l]).map((x) => x.slice(0, 400)));
     if (out.length > 150) break;
   }
   return out.join('\n');
@@ -1556,7 +1564,8 @@ function ticketNote(body) {
 async function runEmailScan(token) {
   const review = $('#review');
   if (!review) return;
-  const days = +($('#days')?.value || 30);
+  const days = +($('#days')?.value || 7);
+  store.set('scanDays', String(days));
   review.innerHTML = `<p class="muted">Searching your email…</p>`;
   try {
     // Every matching email in the window is read each time (nothing is skipped because it was seen before);
@@ -1569,9 +1578,15 @@ async function runEmailScan(token) {
       pageToken = list.nextPageToken;
     } while (pageToken && ids.length < 400);
     const total = ids.length, queue = [...ids], found = [];
-    let done = 0;
+    let done = 0, stop = false;
+    const progress = () => {
+      review.innerHTML = `<p class="muted">Reading email ${done} of ${total}…${found.length ? ` ${found.length} with events so far.` : ''}</p>
+        <button class="btn" id="stopScan">Stop &amp; show what’s found</button>`;
+      $('#stopScan').onclick = () => { stop = true; queue.length = 0; };
+    };
+    progress();
     const work = async () => {
-      while (queue.length) {
+      while (queue.length && !stop) {
         const id = queue.shift();
         try {
           const mail = await extractMail(await gm(`/messages/${id}?format=full`, token), token);
@@ -1580,10 +1595,11 @@ async function runEmailScan(token) {
           if (/sign-in expired|said no/.test(e.message)) throw e; // real Gmail problems stop the scan
           console.warn('Skipped an email:', e); // one odd email shouldn't stop the rest
         }
-        review.innerHTML = `<p class="muted">Reading email ${++done} of ${total}…</p>`;
+        done++;
+        if (!stop) progress();
       }
     };
-    await Promise.all(Array.from({ length: 6 }, work));
+    await Promise.all(Array.from({ length: 4 }, work));
     const no = new Set(JSON.parse(store.get('dismissedMail') || '[]'));
     for (const f of found) {
       f.items = f.items.filter((it) => {

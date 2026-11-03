@@ -1,9 +1,9 @@
 // Makes the calendar open fast and with no signal.
-// - Versioned app files (…?v=25) and library files never change, so they come straight from the saved copy.
+// - Versioned app files (…?v=26) and library files never change, so they come straight from the saved copy.
 // - The page itself (index.html) is checked online, but if the network is slow we show the saved copy
 //   after a moment and refresh it in the background.
 // - Firestore keeps its own offline copy of the events.
-const V = 25;
+const V = 26;
 const CACHE = 'family-calendar-v' + V;
 const LIBFILES = ['crypto', 'ics', 'schedule-text', 'tz', 'mail-filter', 'cloud', 'events'].map((f) => `lib/${f}.js?v=${V}`);
 const SHELL = ['./', 'index.html', `style.css?v=${V}`, `app.js?v=${V}`, ...LIBFILES, 'manifest.webmanifest', 'icon.png', 'icon-192.png'];
