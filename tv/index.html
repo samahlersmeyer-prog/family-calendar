@@ -92,7 +92,9 @@
     .bad { color: var(--accent); font-weight: 700; }
 
     /* Chores & groceries column (wide screens, only when there's something on the lists) */
-    .withlists .cols { grid-template-columns: 1.05fr 1fr 0.72fr; }
+    .withlists .cols { grid-template-columns: 1fr 0.95fr 0.85fr; }
+    .col.lists { overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+    .col.lists .list { overflow: visible; flex: none; }
     .lists .list { flex: 0 1 auto; margin-bottom: 0.9rem; }
     .item { display: flex; gap: 0.6rem; align-items: center; background: var(--card); border: 1px solid var(--line); border-radius: 0.6rem; padding: 0.45rem 0.65rem; margin-bottom: 0.35rem; cursor: pointer; }
     .item .box { flex: none; width: 1.4rem; height: 1.4rem; border-radius: 50%; border: 0.15rem solid var(--muted); display: grid; place-items: center; font-weight: 800; font-size: 0.85rem; color: #fff; }
@@ -121,6 +123,6 @@
 </head>
 <body>
   <div id="app"><div class="center muted">Loading…</div></div>
-  <script type="module" src="tv.js?v=14"></script>
+  <script type="module" src="tv.js?v=15"></script>
 </body>
 </html>
