@@ -1,11 +1,11 @@
-import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=30';
-import { parseICS, hashId } from './lib/ics.js?v=30';
-import { parseScheduleText } from './lib/schedule-text.js?v=30';
-import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=30';
-import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=30';
-import { initCloud } from './lib/cloud.js?v=30';
-import { CHORE_LIB, choreIcon, choresFor, setChoreDay, DAY_SHORT, DAY_LONG, itemDone, dueOn, repeatLabel as choreRepeat, } from './lib/chores.js?v=30';
-import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=30';
+import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=31';
+import { parseICS, hashId } from './lib/ics.js?v=31';
+import { parseScheduleText } from './lib/schedule-text.js?v=31';
+import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=31';
+import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=31';
+import { initCloud } from './lib/cloud.js?v=31';
+import { CHORE_LIB, choreIcon, choresFor, setChoreDay, DAY_SHORT, DAY_LONG, itemDone, dueOn, repeatLabel as choreRepeat, } from './lib/chores.js?v=31';
+import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=31';
 
 /* ---------- config ---------- */
 const CONFIG = { owner: 'samahlersmeyer-prog', repo: 'family-calendar', branch: 'main' };
@@ -1866,12 +1866,12 @@ function drawBoard(box) {
   const kids = chartKids(), today = dow(todayWall()), sel = S.boardChore || '';
   const days = [0, 1, 2, 3, 4, 5, 6];
   box.innerHTML = `
-    <p class="help">${sel ? `Tap the boxes to give <b>${esc(choreIcon(sel))} ${esc(sel)}</b> to a kid on that day. Tap again to take it off. Tap a name for every day.` : 'Pick a chore, then tap the boxes — or drag a chore into a box. Drag one already in a box to move it.'}</p>
+    <p class="help">${sel ? `<b>${esc(choreIcon(sel))} ${esc(sel)}</b>: tap a box, or swipe across a row to fill several days. Tap or swipe again to take it off. Tap a name for every day.` : 'Tap a chore, then tap or swipe across the days. Or drag a chore into a box, and drag one in a box to move it.'}</p>
     <div class="palette">${choreLib().map((c) => `<button class="chorechip ${c === sel ? 'on' : ''}" data-chore="${esc(c)}"><span>${choreIcon(c)}</span>${esc(c)}</button>`).join('')}
       <button class="chorechip add" id="newChore">＋ New chore</button></div>
-    <div class="chart" style="--n:${kids.length}">
+    <div class="chart ${sel ? 'paint' : ''}">
       <div class="corner"></div>${days.map((d) => `<div class="dh ${d === today ? 'today' : ''}">${DAY_SHORT[d].slice(0, d === 4 || d === 2 ? 2 : 1)}</div>`).join('')}
-      ${kids.map((k) => `<button class="kidname" data-kid="${esc(k)}">${esc(k)}</button>${days.map((d) => `<div class="cell ${d === today ? 'today' : ''} ${sel && hasChore(k, sel, d) ? 'has' : ''}" data-kid="${esc(k)}" data-day="${d}">${choresFor(S.items, k, d).map((i) => `<span class="em" data-chore="${esc(i.text)}" title="${esc(i.text)}">${choreIcon(i.text)}</span>`).join('')}</div>`).join('')}`).join('')}
+      ${kids.map((k) => `<button class="kidname" data-kid="${esc(k)}">${esc(k)}</button>${days.map((d) => `<div class="ccell ${d === today ? 'today' : ''} ${sel && hasChore(k, sel, d) ? 'has' : ''}" data-kid="${esc(k)}" data-day="${d}">${choresFor(S.items, k, d).map((i) => `<span class="em" data-chore="${esc(i.text)}" title="${esc(i.text)}">${choreIcon(i.text)}</span>`).join('')}</div>`).join('')}`).join('')}
     </div>
     ${sel ? `<div class="actions"><button class="btn" id="unsel">Done</button></div>` : ''}`;
 
@@ -1889,43 +1889,59 @@ function drawBoard(box) {
     applyChore([choreOn(b.dataset.kid, sel, days, !all)]);
   }));
 
-  // Tap and drag share one handler: a short tap selects/toggles, moving past a few pixels starts a drag.
-  const cellAt = (x, y) => document.elementFromPoint(x, y)?.closest('.cell, .kidname');
+  // Drag: the floating icon sits just above your finger, and the chore lands in the box under the icon (lit up while you drag).
+  const LIFT = 46;
+  const cellAt = (x, y) => document.elementFromPoint(x, y)?.closest('.ccell, .kidname');
   const startDrag = (ev, chore, from) => {
     const sx = ev.clientX, sy = ev.clientY;
     let ghost = null, over = null;
     const move = (e) => {
       if (!ghost && Math.hypot(e.clientX - sx, e.clientY - sy) < 8) return;
       e.preventDefault();
-      if (!ghost) { ghost = document.createElement('div'); ghost.className = 'dragghost'; ghost.textContent = `${choreIcon(chore)} ${chore}`; document.body.append(ghost); }
-      ghost.style.transform = `translate(${e.clientX - 20}px, ${e.clientY - 44}px)`;
-      const c = cellAt(e.clientX, e.clientY);
+      if (!ghost) { ghost = document.createElement('div'); ghost.className = 'dragghost'; ghost.textContent = choreIcon(chore); document.body.append(ghost); }
+      ghost.style.transform = `translate(${e.clientX - 24}px, ${e.clientY - LIFT - 24}px)`;
+      const c = cellAt(e.clientX, e.clientY - LIFT);
       if (c !== over) { over?.classList.remove('over'); over = c; over?.classList.add('over'); }
     };
     const up = (e) => {
       removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
       over?.classList.remove('over');
-      if (!ghost) return from ? (sel ? toggleCell(from.kid, from.day) : select(chore)) : select(chore);
+      if (!ghost) return select(chore);
       ghost.remove();
-      const c = cellAt(e.clientX, e.clientY);
+      const c = cellAt(e.clientX, e.clientY - LIFT);
       if (!c) return;
       const kid = c.dataset.kid, wds = c.classList.contains('kidname') ? days : [+c.dataset.day];
       if (from && from.kid === kid && wds.length === 1 && wds[0] === from.day) return;
-      const ch = [];
-      if (from) ch.push(choreOn(from.kid, chore, [from.day], false));
-      // Moving within the same kid has to build on the first change, so apply in two steps.
-      applyChore(ch).then(() => applyChore([choreOn(kid, chore, wds, true)]));
+      // Moving: take it off the old box first, then put it on the new one (built on the updated list).
+      applyChore(from ? [choreOn(from.kid, chore, [from.day], false)] : []).then(() => applyChore([choreOn(kid, chore, wds, true)]));
       toast(`${choreIcon(chore)} ${chore} → ${kid}, ${wds.length > 1 ? 'every day' : DAY_LONG[wds[0]]}`);
     };
     addEventListener('pointermove', move, { passive: false }); addEventListener('pointerup', up); addEventListener('pointercancel', up);
   };
-  const toggleCell = (kid, d) => applyChore([choreOn(kid, S.boardChore, [d], !hasChore(kid, S.boardChore, d))]);
+  // With a chore picked: tap a box, or swipe across several boxes (Mon → Fri) to fill them all. Swiping from a box that has it clears instead.
+  const startPaint = (ev, c0) => {
+    const on = !hasChore(c0.dataset.kid, sel, +c0.dataset.day);
+    const hit = new Map([[c0.dataset.kid + c0.dataset.day, c0]]);
+    c0.classList.add('over');
+    const move = (e) => {
+      e.preventDefault();
+      const c = document.elementFromPoint(e.clientX, e.clientY)?.closest('.ccell');
+      if (c && !hit.has(c.dataset.kid + c.dataset.day)) { hit.set(c.dataset.kid + c.dataset.day, c); c.classList.add('over'); }
+    };
+    const up = () => {
+      removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
+      const byKid = {};
+      for (const c of hit.values()) (byKid[c.dataset.kid] ||= []).push(+c.dataset.day);
+      applyChore(Object.entries(byKid).map(([kid, wds]) => choreOn(kid, sel, wds, on)));
+    };
+    addEventListener('pointermove', move, { passive: false }); addEventListener('pointerup', up); addEventListener('pointercancel', up);
+  };
   $$('.chorechip[data-chore]', box).forEach((b) => (b.onpointerdown = (e) => startDrag(e, b.dataset.chore, null)));
-  $$('.cell', box).forEach((c) => (c.onpointerdown = (e) => {
+  $$('.ccell', box).forEach((c) => (c.onpointerdown = (e) => {
+    if (sel) return startPaint(e, c);
     const em = e.target.closest('.em');
-    if (em) { e.stopPropagation(); return startDrag(e, em.dataset.chore, { kid: c.dataset.kid, day: +c.dataset.day }); }
-    const kid = c.dataset.kid, d = +c.dataset.day;
-    c.onpointerup = () => { c.onpointerup = null; if (!S.boardChore) return toast('Pick a chore first, or drag one in.'); toggleCell(kid, d); };
+    if (em) return startDrag(e, em.dataset.chore, { kid: c.dataset.kid, day: +c.dataset.day });
+    toast('Pick a chore first, or drag one in.');
   }));
 }
 
