@@ -252,10 +252,18 @@ html, body { overflow-x: hidden; }
 .donebox summary { color: var(--muted); font-weight: 600; cursor: pointer; padding: 6px 0; }
 
 /* chores by the day */
-.daystrip { display: flex; gap: 4px; margin: 2px 0 10px; }
-.daystrip button { flex: 1; border: 1px solid var(--line); background: var(--card); color: var(--muted); border-radius: 10px; padding: 7px 0; font-size: 13px; font-weight: 700; }
-.daystrip button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
-.daypick { display: flex; gap: 4px; }
-.daypick button { flex: 1; border: 1px solid var(--line); background: var(--card); color: var(--muted); border-radius: 999px; padding: 7px 0; font-size: 13px; font-weight: 700; }
-.daypick button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
-.item.plan .tick { border-style: dashed; opacity: .5; }
+.daystrip { display: flex; gap: 4px; margin: 0 0 10px; }
+.daystrip button { flex: 1; min-width: 0; border: 0; background: var(--soft); color: var(--muted); border-radius: 10px; padding: 8px 0; font-size: 13px; font-weight: 700; }
+.daystrip button.on { background: var(--accent); color: #fff; }
+.addrow { display: flex; gap: 8px; }
+.addrow .in { flex: 1; min-width: 0; }
+.addbtn { flex: none; width: 48px; padding: 0; font-size: 22px; }
+.choreopts { display: grid; gap: 8px; }
+.whopick { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+.whopick::-webkit-scrollbar { display: none; }
+.whopick button, .daypick button { flex: none; border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 999px; padding: 6px 12px; font-size: 14px; font-weight: 600; }
+.whopick button.on, .daypick button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.daypick { display: flex; gap: 6px; }
+.daypick button { flex: 1; padding: 6px 0; }
+.planhint { margin: 2px 0 0; font-size: 13px; color: var(--muted); }
+.item.plan .tick { opacity: .35; }
