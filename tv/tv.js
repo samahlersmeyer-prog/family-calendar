@@ -3,11 +3,11 @@
 // Shows practices plus everything relatives see (add ?practices=0 for a relative's screen);
 // To include the Family calendar and 🔒 events (matching Alexa), tap the 🔒 line: the screen shows a code
 // that Sam or Emily type in Settings on their phone. No Google sign-in needed on the Echo.
-import { initCloud } from '../lib/cloud.js?v=35';
-import { itemDone, dueToday, choreIconImg } from '../lib/chores.js?v=35';
-import { decryptJSON } from '../lib/crypto.js?v=35';
-import { expandAll, kindOf, KIDS } from '../lib/events.js?v=35';
-import { todayWall, utcToWall, addDays, addMinutes, diffMinutes, dow } from '../lib/tz.js?v=35';
+import { initCloud } from '../lib/cloud.js?v=36';
+import { itemDone, dueToday, choreIconImg } from '../lib/chores.js?v=36';
+import { decryptJSON } from '../lib/crypto.js?v=36';
+import { expandAll, kindOf, KIDS } from '../lib/events.js?v=36';
+import { todayWall, utcToWall, addDays, addMinutes, diffMinutes, dow } from '../lib/tz.js?v=36';
 
 const RAW = 'https://raw.githubusercontent.com/samahlersmeyer-prog/family-calendar/main/';
 const FRIENDS = { id: 'friends', name: 'Family & Friends', color: '#0891b2' };
@@ -124,10 +124,11 @@ function listsCol() {
   const kidOrder = [...(S.cal.kids || KIDS), 'Mom', 'Dad'];
   const allChores = [...chores, ...doneToday];
   const whos = [...new Set(allChores.map((i) => i.who || ''))].sort((a, b) => (a === '') - (b === '') || kidOrder.indexOf(a) - kidOrder.indexOf(b));
-  const chip = (i) => { const done = itemDone(i); return `<span class="chore ${done ? 'done' : ''}" data-item="${esc(i.id)}">${choreIconImg(i.text, '../')}${esc(i.text)}${done ? ' ✓' : ''}</span>`; };
+  const chip = (i) => { const done = itemDone(i); return `<span class="chore ${done ? 'done' : ''}" data-item="${esc(i.id)}" title="${esc(i.text)}">${choreIconImg(i.text, '../')}${done ? '<b class="ck">✓</b>' : ''}</span>`; };
+  // One row per kid: name, then a big emoji button per chore (no words — the kids know 🗑️ is trash).
   const kidCard = (w) => { const mine = allChores.filter((i) => (i.who || '') === w).sort((a, b) => (a.at || 0) - (b.at || 0));
     const left = mine.filter((i) => !itemDone(i)).length;
-    return `<div class="kidchores ${left ? '' : 'alldone'}"><div class="kn">${esc(w || 'Anyone')}${left ? '' : ' <small>· all done ✓</small>'}</div><div class="chips">${mine.map(chip).join('')}</div></div>`; };
+    return `<div class="kidchores ${left ? '' : 'alldone'}"><div class="kn">${esc(w || 'Anyone')}${left ? '' : '<small>done ✓</small>'}</div><div class="chips">${mine.map(chip).join('')}</div></div>`; };
   return `<div class="col lists">
     ${allChores.length ? `<h2>Today’s chores</h2><div class="list">${whos.map(kidCard).join('')}</div>` : ''}
     ${shop.length ? `<h2>Groceries</h2><div class="list">${shop.map((i) => row(i)).join('')}</div>` : ''}
