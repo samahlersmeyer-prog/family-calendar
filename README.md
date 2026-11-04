@@ -61,3 +61,5 @@ The copy is one-way: change events in this app, not in Google. To leave out the 
 | `scripts/add-events.mjs` | Command-line import used for email: `CAL_PASSCODE=… node scripts/add-events.mjs events.json` |
 
 If you ever change the passcode, update the `CAL_PASSCODE` secret too.
+
+Chore emoji pictures on the kitchen display are from [Twemoji](https://github.com/jdecked/twemoji) (graphics CC-BY 4.0).

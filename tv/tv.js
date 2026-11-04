@@ -3,11 +3,11 @@
 // Shows practices plus everything relatives see (add ?practices=0 for a relative's screen);
 // To include the Family calendar and 🔒 events (matching Alexa), tap the 🔒 line: the screen shows a code
 // that Sam or Emily type in Settings on their phone. No Google sign-in needed on the Echo.
-import { initCloud } from '../lib/cloud.js?v=31';
-import { itemDone, dueToday, choreIcon } from '../lib/chores.js?v=31';
-import { decryptJSON } from '../lib/crypto.js?v=31';
-import { expandAll, kindOf } from '../lib/events.js?v=31';
-import { todayWall, utcToWall, addDays, addMinutes, diffMinutes, dow } from '../lib/tz.js?v=31';
+import { initCloud } from '../lib/cloud.js?v=32';
+import { itemDone, dueToday, choreIconImg } from '../lib/chores.js?v=32';
+import { decryptJSON } from '../lib/crypto.js?v=32';
+import { expandAll, kindOf } from '../lib/events.js?v=32';
+import { todayWall, utcToWall, addDays, addMinutes, diffMinutes, dow } from '../lib/tz.js?v=32';
 
 const RAW = 'https://raw.githubusercontent.com/samahlersmeyer-prog/family-calendar/main/';
 const FRIENDS = { id: 'friends', name: 'Family & Friends', color: '#0891b2' };
@@ -119,7 +119,7 @@ function listsCol() {
   const chores = open.filter((i) => i.list === 'todo'), shop = open.filter((i) => i.list === 'shop');
   const doneToday = S.items.filter((i) => i.list === 'todo' && dueToday(i) && itemDone(i) && i.doneOn === todayWall());
   if (!chores.length && !shop.length && !doneToday.length) return '';
-  const row = (i, done) => `<div class="item ${done ? 'done' : ''}" data-item="${esc(i.id)}"><span class="box">${done ? '✓' : ''}</span><span class="txt">${i.who ? `<b>${esc(i.who)}:</b> ` : ''}${i.list === 'todo' ? `<span class="cem">${choreIcon(i.text)}</span>` : ''}${esc(i.text)}</span></div>`;
+  const row = (i, done) => `<div class="item ${done ? 'done' : ''}" data-item="${esc(i.id)}"><span class="box">${done ? '✓' : ''}</span><span class="txt">${i.who ? `<b>${esc(i.who)}:</b> ` : ''}${i.list === 'todo' ? choreIconImg(i.text, '../') : ''}${esc(i.text)}</span></div>`;
   return `<div class="col lists">
     ${chores.length || doneToday.length ? `<h2>Today’s chores</h2><div class="list">${chores.sort((a, b) => (a.who || '~').localeCompare(b.who || '~')).map((i) => row(i)).join('')}${doneToday.map((i) => row(i, true)).join('')}</div>` : ''}
     ${shop.length ? `<h2>Groceries</h2><div class="list">${shop.map((i) => row(i)).join('')}</div>` : ''}
