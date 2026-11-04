@@ -30,7 +30,7 @@ For the weekly email, open Settings → Weekly email, list the addresses, and pa
 
 ## Echo Show / kitchen display
 
-**Kitchen display:** on the Echo Show say “Alexa, open Silk Browser”, go to `samahlersmeyer-prog.github.io/family-calendar/tv` and enter the family code. Tap once for full screen. It shows today in big type, the next six days, who's driving, chores and groceries (tap to check off), and updates live. It shows what relatives see (no practices — add `?practices=1` to the address to include them); tap “sign in” at the bottom to include the Family calendar too.
+**Kitchen display:** on the Echo Show say “Alexa, open Silk Browser”, go to `samahlersmeyer-prog.github.io/family-calendar/tv` and enter the family code. Tap once for full screen. It shows today in big type, the next six days, who's driving, chores and groceries (tap to check off), and updates live. It shows practices and everything relatives see (add `?practices=0` to the address for a relative's screen). Private events (the Family calendar and 🔒 events) only show after Sam or Emily taps “sign in” at the bottom once — then it matches what Alexa shows.
 
 **Alexa's own calendar (Google Calendar copy):** every 30 minutes the Action copies the calendar into a Google Calendar, which you link in the Alexa app so events show on the Echo's home screen and Alexa can answer “what's on the calendar?”. One-time setup:
 

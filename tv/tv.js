@@ -1,6 +1,7 @@
 // Kitchen display: a big, glanceable, always-updating view for the Echo Show (or any tablet/TV).
 // Open https://samahlersmeyer-prog.github.io/family-calendar/tv/ and enter the family code once.
-// Shows what relatives see; sign in as Sam or Emily to include the Family calendar and 🔒 events too.
+// Shows practices plus everything relatives see (add ?practices=0 for a relative's screen);
+// sign in as Sam or Emily to include the Family calendar and 🔒 events too, matching what Alexa shows.
 import { initCloud } from '../lib/cloud.js?v=26';
 import { decryptJSON } from '../lib/crypto.js?v=26';
 import { expandAll, kindOf } from '../lib/events.js?v=26';
@@ -50,8 +51,9 @@ const isMaybe = (e) => e.maybe || /^\s*(maybe\b|if\b|possible\b)|\bif (they|we|h
 /* ---------- data ---------- */
 function eventsByDay(from, to) {
   const idx = {};
-  // Signed in as Sam or Emily: everything. Otherwise what relatives see — no practices unless ?practices=1.
-  const practices = S.editor || new URLSearchParams(location.search).get('practices') === '1';
+  // This is the family's own kitchen screen, so practices show by default (like the Alexa calendar).
+  // ?practices=0 hides them for a screen at a relative's house. Signed in as Sam or Emily: everything.
+  const practices = S.editor || new URLSearchParams(location.search).get('practices') !== '0';
   for (const e of expandAll(S.events, S.feeds)) {
     if (!practices && kindOf(e) === 'practice') continue;
     const sd = e.start.slice(0, 10);
@@ -221,7 +223,7 @@ function paint() {
     <footer>
       <span>${S.online ? `Updated ${shortTime(utcToWall(new Date(S.updated || Date.now())))}` : '<span class="off">Offline — showing the last update</span>'}</span>
       <span class="sp"></span>
-      ${S.editor ? `<span>Showing everything for ${esc((S.user?.name || '').split(' ')[0] || S.user?.email)}</span>` : `<a href="#" id="signin">Sam or Emily: sign in to show the Family calendar too</a>`}
+      ${S.editor ? `<span>Showing everything for ${esc((S.user?.name || '').split(' ')[0] || S.user?.email)}</span>` : `<a href="#" id="signin" class="signin">🔒 Some events are hidden — Sam or Emily, tap here once to sign in and show everything</a>`}
     </footer>
   </div>`;
   document.querySelectorAll('[data-item]').forEach((el) => (el.onclick = (ev) => { ev.stopPropagation(); tick(el.dataset.item); }));
