@@ -1,11 +1,11 @@
-import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=29';
-import { parseICS, hashId } from './lib/ics.js?v=29';
-import { parseScheduleText } from './lib/schedule-text.js?v=29';
-import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=29';
-import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=29';
-import { initCloud } from './lib/cloud.js?v=29';
-import { DAY_SHORT, DAY_LONG, itemDone, dueOn, repeatLabel as choreRepeat, starterChores } from './lib/chores.js?v=29';
-import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=29';
+import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=30';
+import { parseICS, hashId } from './lib/ics.js?v=30';
+import { parseScheduleText } from './lib/schedule-text.js?v=30';
+import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=30';
+import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=30';
+import { initCloud } from './lib/cloud.js?v=30';
+import { CHORE_LIB, choreIcon, choresFor, setChoreDay, DAY_SHORT, DAY_LONG, itemDone, dueOn, repeatLabel as choreRepeat, } from './lib/chores.js?v=30';
+import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=30';
 
 /* ---------- config ---------- */
 const CONFIG = { owner: 'samahlersmeyer-prog', repo: 'family-calendar', branch: 'main' };
@@ -1727,7 +1727,7 @@ function openLists(tab = store.get('listTab') || 'shop') {
   S.listTab = tab; S.listsOpen = true; S.choreDay = dow(todayWall());
   const sh = openModal(`
     <div class="head"><div><h2>Lists</h2><p class="help">Shared with Emily and the kitchen display.</p></div><button class="btn icon ghost" data-close aria-label="Close">✕</button></div>
-    <div class="seg listseg"><button data-lt="shop">🛒 Groceries</button><button data-lt="todo">✅ Chores</button></div>
+    <div class="seg listseg"><button data-lt="shop">🛒 Groceries</button><button data-lt="board">🗓️ Chore chart</button><button data-lt="todo">✅ Today</button></div>
     <div id="dayStrip" class="daystrip" role="tablist"></div>
     <form id="addItem" class="additem">
       <div class="addrow"><input class="in" name="text" maxlength="190" autocomplete="off" enterkeyhint="done" required><button class="btn primary addbtn" aria-label="Add">＋</button></div>
@@ -1762,6 +1762,7 @@ function openLists(tab = store.get('listTab') || 'shop') {
     S.listTab = t; store.set('listTab', t);
     $$('[data-lt]', sh).forEach((b) => b.classList.toggle('on', b.dataset.lt === t));
     $('#dayStrip').classList.toggle('hidden', t !== 'todo');
+    f.classList.toggle('hidden', t === 'board');
     f.text.placeholder = t === 'shop' ? 'Add an item (milk, eggs…)' : 'Add a chore…';
     showOpts(); drawLists();
   };
@@ -1800,6 +1801,7 @@ function drawLists() {
   const box = $('#listBody');
   if (!box) return;
   if (S.itemsErr) { box.innerHTML = '<p class="help bad">Lists aren’t switched on yet — Sam needs to publish the new database rules (see the README).</p>'; return; }
+  if (S.listTab === 'board') return drawBoard(box);
   const t = S.listTab;
   const today = dow(todayWall()), wd = t === 'todo' ? S.choreDay ?? today : today, isToday = wd === today;
   // Chores: only the ones on for the day picked in the strip. Ticking off only counts for today.
@@ -1815,20 +1817,10 @@ function drawLists() {
     ? [...new Set(open.map((i) => i.who || ''))].sort((a, b) => (a === '') - (b === '') || WHO().indexOf(a) - WHO().indexOf(b))
       .map((w) => `<h4>${esc(w || 'Anyone')}</h4>${open.filter((i) => (i.who || '') === w).map(row).join('')}`).join('')
     : open.map(row).join('');
-  const hasChores = S.items.some((i) => i.list === 'todo' && i.repeat === 'days');
-  const starter = t === 'todo' && !hasChores ? `<div class="actions"><button class="btn" id="starterChores">✨ Add suggested chores for the kids</button></div>` : '';
   const clearable = done.filter((i) => !i.repeat);
   box.innerHTML = strip + (open.length ? groups : `<p class="muted">${t === 'shop' ? 'Nothing on the list.' : isToday && done.length ? 'All done today. 🎉' : `No chores ${isToday ? 'today' : `on ${DAY_SHORT[wd]}`}.`}</p>`)
     + (done.length ? `<details class="donebox" ${t === 'shop' ? 'open' : ''}><summary>${done.length} done</summary>${done.map(row).join('')}
-      ${clearable.length ? `<div class="actions"><button class="btn" id="clearDone">Clear ${t === 'shop' ? 'checked items' : 'finished to-dos'}</button></div>` : ''}</details>` : '') + starter;
-  if ($('#starterChores')) $('#starterChores').onclick = async () => {
-    const list = starterChores(kidsList());
-    if (!list.length || !confirm(`Add ${list.length} suggested chores, spread across the week? You can delete or change any of them.`)) return;
-    const now = Date.now();
-    const add = list.map((c, n) => ({ id: newId(), list: 'todo', done: false, by: myName() || '', at: now + n, ...c }));
-    S.items = [...S.items, ...add]; drawLists();
-    try { for (const i of add) await cloud.putItem(S.space, i); toast('Chores added — tap a day to see who does what.'); } catch (err) { listErr(err); }
-  };
+      ${clearable.length ? `<div class="actions"><button class="btn" id="clearDone">Clear ${t === 'shop' ? 'checked items' : 'finished to-dos'}</button></div>` : ''}</details>` : '');
   $$('.item', box).forEach((el) => {
     const i = S.items.find((x) => x.id === el.dataset.item);
     $('.tick', el).onclick = async () => {
@@ -1848,6 +1840,93 @@ function drawLists() {
     S.items = S.items.filter((x) => !ids.has(x.id)); drawLists();
     try { for (const id of ids) await cloud.delItem(S.space, id); } catch (err) { listErr(err); }
   };
+}
+
+/* ---------- chore chart: kids down the side, days across, chores dropped into the boxes ---------- */
+const chartKids = () => kidsList();
+function choreLib() {
+  const custom = store.get('choreLib') || [];
+  const used = S.items.filter((i) => i.list === 'todo' && i.who && (i.repeat === 'days' || i.repeat === 'day')).map((i) => i.text);
+  const seen = new Set();
+  return [...CHORE_LIB, ...custom, ...used].filter((c) => { const k = c.trim().toLowerCase(); return !seen.has(k) && seen.add(k); });
+}
+async function applyChore(changes) {
+  for (const c of changes) {
+    if (c.put) S.items = S.items.some((x) => x.id === c.put.id) ? S.items.map((x) => (x.id === c.put.id ? c.put : x)) : [...S.items, c.put];
+    if (c.del) S.items = S.items.filter((x) => x.id !== c.del);
+  }
+  drawLists();
+  try { for (const c of changes) { if (c.put) await cloud.putItem(S.space, c.put); if (c.del) await cloud.delItem(S.space, c.del); } } catch (err) { listErr(err); }
+}
+const makeChore = (x) => ({ id: newId(), list: 'todo', done: false, by: myName() || '', at: Date.now(), ...x });
+function choreOn(kid, chore, wds, on) { return setChoreDay(S.items, kid, chore, wds, on, makeChore); }
+const hasChore = (kid, chore, wd) => choresFor(S.items, kid, wd).some((i) => i.text.trim().toLowerCase() === chore.trim().toLowerCase());
+
+function drawBoard(box) {
+  const kids = chartKids(), today = dow(todayWall()), sel = S.boardChore || '';
+  const days = [0, 1, 2, 3, 4, 5, 6];
+  box.innerHTML = `
+    <p class="help">${sel ? `Tap the boxes to give <b>${esc(choreIcon(sel))} ${esc(sel)}</b> to a kid on that day. Tap again to take it off. Tap a name for every day.` : 'Pick a chore, then tap the boxes — or drag a chore into a box. Drag one already in a box to move it.'}</p>
+    <div class="palette">${choreLib().map((c) => `<button class="chorechip ${c === sel ? 'on' : ''}" data-chore="${esc(c)}"><span>${choreIcon(c)}</span>${esc(c)}</button>`).join('')}
+      <button class="chorechip add" id="newChore">＋ New chore</button></div>
+    <div class="chart" style="--n:${kids.length}">
+      <div class="corner"></div>${days.map((d) => `<div class="dh ${d === today ? 'today' : ''}">${DAY_SHORT[d].slice(0, d === 4 || d === 2 ? 2 : 1)}</div>`).join('')}
+      ${kids.map((k) => `<button class="kidname" data-kid="${esc(k)}">${esc(k)}</button>${days.map((d) => `<div class="cell ${d === today ? 'today' : ''} ${sel && hasChore(k, sel, d) ? 'has' : ''}" data-kid="${esc(k)}" data-day="${d}">${choresFor(S.items, k, d).map((i) => `<span class="em" data-chore="${esc(i.text)}" title="${esc(i.text)}">${choreIcon(i.text)}</span>`).join('')}</div>`).join('')}`).join('')}
+    </div>
+    ${sel ? `<div class="actions"><button class="btn" id="unsel">Done</button></div>` : ''}`;
+
+  const select = (c) => { S.boardChore = S.boardChore === c ? '' : c; drawLists(); };
+  $('#newChore').onclick = () => {
+    const name = (prompt('New chore (e.g. Fold towels)') || '').trim().slice(0, 60);
+    if (!name) return;
+    store.set('choreLib', [...(store.get('choreLib') || []), name]);
+    S.boardChore = name; drawLists();
+  };
+  if ($('#unsel')) $('#unsel').onclick = () => select('');
+  $$('.kidname', box).forEach((b) => (b.onclick = () => {
+    if (!sel) return toast('Pick a chore first.');
+    const all = days.every((d) => hasChore(b.dataset.kid, sel, d));
+    applyChore([choreOn(b.dataset.kid, sel, days, !all)]);
+  }));
+
+  // Tap and drag share one handler: a short tap selects/toggles, moving past a few pixels starts a drag.
+  const cellAt = (x, y) => document.elementFromPoint(x, y)?.closest('.cell, .kidname');
+  const startDrag = (ev, chore, from) => {
+    const sx = ev.clientX, sy = ev.clientY;
+    let ghost = null, over = null;
+    const move = (e) => {
+      if (!ghost && Math.hypot(e.clientX - sx, e.clientY - sy) < 8) return;
+      e.preventDefault();
+      if (!ghost) { ghost = document.createElement('div'); ghost.className = 'dragghost'; ghost.textContent = `${choreIcon(chore)} ${chore}`; document.body.append(ghost); }
+      ghost.style.transform = `translate(${e.clientX - 20}px, ${e.clientY - 44}px)`;
+      const c = cellAt(e.clientX, e.clientY);
+      if (c !== over) { over?.classList.remove('over'); over = c; over?.classList.add('over'); }
+    };
+    const up = (e) => {
+      removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
+      over?.classList.remove('over');
+      if (!ghost) return from ? (sel ? toggleCell(from.kid, from.day) : select(chore)) : select(chore);
+      ghost.remove();
+      const c = cellAt(e.clientX, e.clientY);
+      if (!c) return;
+      const kid = c.dataset.kid, wds = c.classList.contains('kidname') ? days : [+c.dataset.day];
+      if (from && from.kid === kid && wds.length === 1 && wds[0] === from.day) return;
+      const ch = [];
+      if (from) ch.push(choreOn(from.kid, chore, [from.day], false));
+      // Moving within the same kid has to build on the first change, so apply in two steps.
+      applyChore(ch).then(() => applyChore([choreOn(kid, chore, wds, true)]));
+      toast(`${choreIcon(chore)} ${chore} → ${kid}, ${wds.length > 1 ? 'every day' : DAY_LONG[wds[0]]}`);
+    };
+    addEventListener('pointermove', move, { passive: false }); addEventListener('pointerup', up); addEventListener('pointercancel', up);
+  };
+  const toggleCell = (kid, d) => applyChore([choreOn(kid, S.boardChore, [d], !hasChore(kid, S.boardChore, d))]);
+  $$('.chorechip[data-chore]', box).forEach((b) => (b.onpointerdown = (e) => startDrag(e, b.dataset.chore, null)));
+  $$('.cell', box).forEach((c) => (c.onpointerdown = (e) => {
+    const em = e.target.closest('.em');
+    if (em) { e.stopPropagation(); return startDrag(e, em.dataset.chore, { kid: c.dataset.kid, day: +c.dataset.day }); }
+    const kid = c.dataset.kid, d = +c.dataset.day;
+    c.onpointerup = () => { c.onpointerup = null; if (!S.boardChore) return toast('Pick a chore first, or drag one in.'); toggleCell(kid, d); };
+  }));
 }
 
 /* ---------- phone notifications (sent by the GitHub Action, see scripts/notify.mjs) ---------- */

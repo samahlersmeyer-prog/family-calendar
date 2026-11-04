@@ -267,3 +267,21 @@ html, body { overflow-x: hidden; }
 .daypick button { flex: 1; padding: 6px 0; }
 .planhint { margin: 2px 0 0; font-size: 13px; color: var(--muted); }
 .item.plan .tick { opacity: .35; }
+
+/* chore chart */
+.palette { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 14px; }
+.chorechip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); background: var(--soft); color: var(--ink); border-radius: 999px; padding: 7px 12px; font-size: 14px; font-weight: 600; touch-action: none; user-select: none; -webkit-user-select: none; }
+.chorechip span { font-size: 16px; }
+.chorechip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.chorechip.add { background: transparent; color: var(--muted); border-style: dashed; touch-action: auto; }
+.chart { display: grid; grid-template-columns: minmax(52px, auto) repeat(7, 1fr); gap: 3px; user-select: none; -webkit-user-select: none; }
+.chart .dh { text-align: center; font-size: 12px; font-weight: 700; color: var(--muted); padding: 2px 0 4px; }
+.chart .dh.today { color: var(--accent); }
+.kidname { border: 0; background: transparent; color: var(--ink); font-weight: 700; font-size: 14px; text-align: left; padding: 0 6px 0 0; }
+.cell { min-height: 48px; background: var(--soft); border-radius: 8px; padding: 3px; display: flex; flex-wrap: wrap; align-content: flex-start; justify-content: center; gap: 1px; border: 2px solid transparent; }
+.cell.today { border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+.cell.has { background: color-mix(in srgb, var(--accent) 22%, var(--soft)); }
+.cell.over, .kidname.over { outline: 2px solid var(--accent); outline-offset: 1px; }
+.cell .em { font-size: 17px; line-height: 1.15; touch-action: none; cursor: grab; }
+.dragghost { position: fixed; left: 0; top: 0; z-index: 9999; pointer-events: none; background: var(--accent); color: #fff; font-weight: 700; font-size: 14px; padding: 7px 12px; border-radius: 999px; box-shadow: 0 6px 18px rgba(0,0,0,.35); white-space: nowrap; }
+.listseg button { padding-left: 6px; padding-right: 6px; white-space: nowrap; }
