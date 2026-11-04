@@ -103,14 +103,16 @@
     .item.done { opacity: 0.5; }
     .item.done .box { background: var(--accent); border-color: var(--accent); }
     .item.done .txt { text-decoration: line-through; }
-    .kidchores { display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0; border-bottom: 1px solid var(--line); }
-    .kidchores .kn { flex: none; width: 3.6rem; font-weight: 800; font-size: 1.05rem; line-height: 1.1; }
-    .kidchores .kn small { display: block; font-size: 0.75rem; font-weight: 700; color: var(--muted); }
+    .kidchores { padding: 0.25rem 0 0.4rem; border-bottom: 1px solid var(--line); }
+    .kidchores .kn { font-weight: 800; font-size: 1rem; margin-bottom: 0.25rem; }
+    .kidchores .kn small { margin-left: 0.4rem; font-size: 0.8rem; font-weight: 700; color: var(--muted); }
     .kidchores.alldone .chips { opacity: 0.45; }
     .kidchores .chips { display: flex; flex-wrap: wrap; gap: 0.35rem; }
-    .chore { position: relative; width: 2.6rem; height: 2.6rem; display: grid; place-items: center; background: var(--card); border: 1px solid var(--line); border-radius: 0.7rem; cursor: pointer; }
-    .chore .cem { width: 1.7rem; height: 1.7rem; margin: 0; }
+    .chore { position: relative; display: inline-flex; align-items: center; gap: 0.3rem; background: var(--card); border: 1px solid var(--line); border-radius: 0.7rem; padding: 0.25rem 0.55rem 0.25rem 0.3rem; cursor: pointer; }
+    .chore .cem { width: 1.3rem; height: 1.3rem; margin: 0; flex: none; }
+    .chore .cw { font-size: 0.92rem; font-weight: 700; white-space: nowrap; }
     .chore.done { opacity: 0.4; }
+    .chore.done .cw { text-decoration: line-through; }
     .chore .ck { position: absolute; right: -0.25rem; bottom: -0.25rem; width: 1.1rem; height: 1.1rem; border-radius: 50%; background: #22c55e; color: #fff; font-size: 0.7rem; display: grid; place-items: center; }
 
     /* Narrow / portrait screens: stack the two columns */
@@ -123,6 +125,6 @@
 </head>
 <body>
   <div id="app"><div class="center muted">Loading…</div></div>
-  <script type="module" src="tv.js?v=15"></script>
+  <script type="module" src="tv.js?v=16"></script>
 </body>
 </html>

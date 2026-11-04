@@ -124,8 +124,8 @@ function listsCol() {
   const kidOrder = [...(S.cal.kids || KIDS), 'Mom', 'Dad'];
   const allChores = [...chores, ...doneToday];
   const whos = [...new Set(allChores.map((i) => i.who || ''))].sort((a, b) => (a === '') - (b === '') || kidOrder.indexOf(a) - kidOrder.indexOf(b));
-  const chip = (i) => { const done = itemDone(i); return `<span class="chore ${done ? 'done' : ''}" data-item="${esc(i.id)}" title="${esc(i.text)}">${choreIconImg(i.text, '../')}${done ? '<b class="ck">✓</b>' : ''}</span>`; };
-  // One row per kid: name, then a big emoji button per chore (no words — the kids know 🗑️ is trash).
+  const chip = (i) => { const done = itemDone(i); return `<span class="chore ${done ? 'done' : ''}" data-item="${esc(i.id)}" title="${esc(i.text)}">${choreIconImg(i.text, '../')}<span class="cw">${esc(i.text)}</span>${done ? '<b class="ck">✓</b>' : ''}</span>`; };
+  // One row per kid: name, then a button per chore with its emoji and name.
   const kidCard = (w) => { const mine = allChores.filter((i) => (i.who || '') === w).sort((a, b) => (a.at || 0) - (b.at || 0));
     const left = mine.filter((i) => !itemDone(i)).length;
     return `<div class="kidchores ${left ? '' : 'alldone'}"><div class="kn">${esc(w || 'Anyone')}${left ? '' : '<small>done ✓</small>'}</div><div class="chips">${mine.map(chip).join('')}</div></div>`; };
