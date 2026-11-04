@@ -54,6 +54,12 @@
     .ev .meta { margin-top: 0.25rem; font-size: 1rem; color: var(--muted); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .ev .ride { margin-top: 0.2rem; font-size: 1rem; font-weight: 700; }
     .ev.done { opacity: 0.42; }
+    .pair { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: grid; place-items: center; }
+    .pair .card { background: var(--card); color: var(--ink); border-radius: 1.2rem; padding: 2rem 2.4rem; max-width: 38rem; text-align: center; }
+    .pair h1 { margin: 0 0 .6rem; font-size: 2rem; }
+    .pair p { font-size: 1.15rem; line-height: 1.4; }
+    .pair .code { font-size: 4.4rem; font-weight: 800; letter-spacing: .12em; margin: 1rem 0; font-variant-numeric: tabular-nums; }
+    .pair a { color: var(--muted); font-size: 1rem; }
     footer .signin { color: var(--accent); font-weight: 800; text-decoration: none; }
     .list.dense .ev { padding: 0.45rem 0.85rem; margin-bottom: 0.4rem; }
     .list.dense .ev .title { font-size: 1.15rem; -webkit-line-clamp: 1; }
@@ -105,6 +111,6 @@
 </head>
 <body>
   <div id="app"><div class="center muted">Loading…</div></div>
-  <script type="module" src="tv.js?v=5"></script>
+  <script type="module" src="tv.js?v=6"></script>
 </body>
 </html>

@@ -28,6 +28,11 @@ service cloud.firestore {
       allow delete: if isEditor(resource.data.space);
     }
 
+    // A kitchen display (Echo) paired by Sam or Emily: signed in anonymously, listed in /spaces/{space}/displays.
+    function isDisplay(space) {
+      return request.auth != null && exists(/databases/$(database)/documents/spaces/$(space)/displays/$(request.auth.uid));
+    }
+
     match /spaces/{space} {
       allow get: if true;          // needs the secret id
       allow list: if false;        // nobody can browse for spaces
@@ -35,7 +40,7 @@ service cloud.firestore {
       allow update, delete: if isEditor(space);
 
       match /events/{eventId} {
-        allow get, list: if resource.data.shared == true || isEditor(space);
+        allow get, list: if resource.data.shared == true || isEditor(space) || isDisplay(space);
         allow create: if isEditor(space) || (
           // relatives' events wait for Sam or Emily to approve (hidden from everyone until then)
           request.resource.data.cal == 'friends'
@@ -79,6 +84,21 @@ service cloud.firestore {
         allow create, update: if request.resource.data.keys().hasOnly(['sub', 'name', 'editor', 'email', 'remind', 'changes', 'weekly', 'practices', 'kid', 'at'])
           && request.resource.data.sub is map
           && (request.resource.data.editor != true || (isEditor(space) && request.resource.data.email == me()));
+      }
+
+      // Kitchen display pairing: the Echo posts a 6-digit code; an editor reads it and approves the Echo.
+      match /pairing/{code} {
+        allow create: if request.auth != null
+          && request.resource.data.keys().hasOnly(['uid', 'at'])
+          && request.resource.data.uid == request.auth.uid;
+        allow get: if isEditor(space);
+        allow list: if false;
+        allow delete: if isEditor(space);
+      }
+      match /displays/{uid} {
+        allow get: if isEditor(space) || (request.auth != null && request.auth.uid == uid);
+        allow list, create, update: if isEditor(space);
+        allow delete: if isEditor(space) || (request.auth != null && request.auth.uid == uid);
       }
 
       // Editors-only settings (weekly email recipients and the Gmail app password that sends it).

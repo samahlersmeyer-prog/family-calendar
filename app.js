@@ -1,10 +1,10 @@
-import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=26';
-import { parseICS, hashId } from './lib/ics.js?v=26';
-import { parseScheduleText } from './lib/schedule-text.js?v=26';
-import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=26';
-import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=26';
-import { initCloud } from './lib/cloud.js?v=26';
-import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=26';
+import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=27';
+import { parseICS, hashId } from './lib/ics.js?v=27';
+import { parseScheduleText } from './lib/schedule-text.js?v=27';
+import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=27';
+import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=27';
+import { initCloud } from './lib/cloud.js?v=27';
+import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=27';
 
 /* ---------- config ---------- */
 const CONFIG = { owner: 'samahlersmeyer-prog', repo: 'family-calendar', branch: 'main' };
@@ -1940,6 +1940,15 @@ function calRow(c) {
 
 const familyLink = () => `https://${CONFIG.owner}.github.io/${CONFIG.repo}/#s=${S.space}`;
 
+async function drawDisplays() {
+  const box = $('#displays');
+  if (!box) return;
+  let list = [];
+  try { list = await cloud.listDisplays(S.space); } catch { return; }
+  box.innerHTML = list.map((d) => `<div class="att"><span>Display added ${esc(new Date(d.at).toLocaleDateString())}${d.by ? ' by ' + esc(d.by.split('@')[0]) : ''}</span><button class="btn icon ghost" data-rmdisp="${esc(d.id)}" aria-label="Remove">✕</button></div>`).join('');
+  box.querySelectorAll('[data-rmdisp]').forEach((b) => (b.onclick = async () => { await cloud.removeDisplay(S.space, b.dataset.rmdisp).catch(() => {}); drawDisplays(); }));
+}
+
 function openSettings() {
   const ed = isEditor();
   const sh = openModal(`
@@ -1972,6 +1981,11 @@ function openSettings() {
     <h4>Notifications</h4>
     <div id="pushBox"><p class="help">Checking this phone…</p></div>
 
+    ${ed ? `<h4>Kitchen display</h4>
+    <p class="help">To show private events on the Echo, tap the 🔒 line at the bottom of its screen, then type the code it shows.</p>
+    <div class="two"><input class="in" id="pairCode" inputmode="numeric" maxlength="7" placeholder="6-digit code"><button class="btn primary" id="pairBtn">Show everything</button></div>
+    <div id="displays"></div>` : ''}
+
     ${ed ? `<h4>Weekly email</h4>
     <div id="digestBox"><p class="help">Loading…</p></div>` : ''}
 
@@ -1983,6 +1997,7 @@ function openSettings() {
   $('[data-close]', sh).onclick = closeModal;
   drawPush();
   if (ed) drawDigest();
+  if (ed) drawDisplays();
   $$('[data-size]', sh).forEach((b) => (b.onclick = () => { store.set('textSize', b.dataset.size || null); applyTextSize(); closeModal(); openSettings(); }));
   if ($('#signIn')) $('#signIn').onclick = () => { closeModal(); cloud.signIn().catch((e) => toast(e.message, 6000)); };
   if ($('#signOut')) $('#signOut').onclick = async () => {
@@ -1994,6 +2009,16 @@ function openSettings() {
     toast('Signed out — this device no longer shows the calendar');
   };
   if (!ed) return;
+
+  $('#pairBtn').onclick = async () => {
+    const code = $('#pairCode').value.replace(/\D/g, '');
+    if (code.length !== 6) return toast('Type the 6 digits shown on the display');
+    try {
+      const ok = await cloud.approveDisplay(S.space, code, S.user?.email || '');
+      if (!ok) return toast('That code didn’t match — tap the 🔒 line on the display again for a new one', 6000);
+      $('#pairCode').value = ''; toast('Done — the display now shows everything'); drawDisplays();
+    } catch (e) { toast('Couldn’t pair: ' + (e.code || e.message) + ' — publish the latest firestore.rules in Firebase', 8000); }
+  };
 
   const link = familyLink();
   const inviteText = (code) => `You're invited to the ${S.cal.title || 'family calendar'}! 🗓

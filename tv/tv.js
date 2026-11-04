@@ -1,11 +1,12 @@
 // Kitchen display: a big, glanceable, always-updating view for the Echo Show (or any tablet/TV).
 // Open https://samahlersmeyer-prog.github.io/family-calendar/tv/ and enter the family code once.
 // Shows practices plus everything relatives see (add ?practices=0 for a relative's screen);
-// sign in as Sam or Emily to include the Family calendar and 🔒 events too, matching what Alexa shows.
-import { initCloud } from '../lib/cloud.js?v=26';
-import { decryptJSON } from '../lib/crypto.js?v=26';
-import { expandAll, kindOf } from '../lib/events.js?v=26';
-import { todayWall, utcToWall, addDays, addMinutes, diffMinutes, dow } from '../lib/tz.js?v=26';
+// To include the Family calendar and 🔒 events (matching Alexa), tap the 🔒 line: the screen shows a code
+// that Sam or Emily type in Settings on their phone. No Google sign-in needed on the Echo.
+import { initCloud } from '../lib/cloud.js?v=27';
+import { decryptJSON } from '../lib/crypto.js?v=27';
+import { expandAll, kindOf } from '../lib/events.js?v=27';
+import { todayWall, utcToWall, addDays, addMinutes, diffMinutes, dow } from '../lib/tz.js?v=27';
 
 const RAW = 'https://raw.githubusercontent.com/samahlersmeyer-prog/family-calendar/main/';
 const FRIENDS = { id: 'friends', name: 'Family & Friends', color: '#0891b2' };
@@ -21,7 +22,7 @@ const store = {
 };
 const app = $('#app');
 
-const S = { space: null, user: null, editor: false, cal: null, events: [], feeds: [], rides: {}, items: [], updated: 0, online: navigator.onLine };
+const S = { space: null, user: null, editor: false, display: false, pairCode: '', cal: null, events: [], feeds: [], rides: {}, items: [], updated: 0, online: navigator.onLine };
 let cloud, unsubs = [];
 
 /* ---------- formatting ---------- */
@@ -53,7 +54,7 @@ function eventsByDay(from, to) {
   const idx = {};
   // This is the family's own kitchen screen, so practices show by default (like the Alexa calendar).
   // ?practices=0 hides them for a screen at a relative's house. Signed in as Sam or Emily: everything.
-  const practices = S.editor || new URLSearchParams(location.search).get('practices') !== '0';
+  const practices = S.editor || S.display || new URLSearchParams(location.search).get('practices') !== '0';
   for (const e of expandAll(S.events, S.feeds)) {
     if (!practices && kindOf(e) === 'practice') continue;
     const sd = e.start.slice(0, 10);
@@ -103,7 +104,7 @@ async function start() {
   if (!sp) { store.set('tvSpace', null); return renderCode('That calendar wasn’t found. Enter the family code again.'); }
   S.cal = sp;
   unsubs.push(cloud.watchSpace(S.space, (d) => { if (d) { S.cal = d; paint(); } }));
-  unsubs.push(cloud.watchEvents(S.space, !S.editor, (docs) => { S.events = docs; S.updated = Date.now(); paint(); }, () => paint()));
+  unsubs.push(cloud.watchEvents(S.space, !(S.editor || S.display), (docs) => { S.events = docs; S.updated = Date.now(); paint(); }, () => paint()));
   unsubs.push(cloud.watchRides(S.space, (r) => { S.rides = r || {}; paint(); }));
   unsubs.push(cloud.watchItems(S.space, (items) => { S.items = items || []; paint(); }));
   await loadFeeds();
@@ -223,13 +224,43 @@ function paint() {
     <footer>
       <span>${S.online ? `Updated ${shortTime(utcToWall(new Date(S.updated || Date.now())))}` : '<span class="off">Offline — showing the last update</span>'}</span>
       <span class="sp"></span>
-      ${S.editor ? `<span>Showing everything for ${esc((S.user?.name || '').split(' ')[0] || S.user?.email)}</span>` : `<a href="#" id="signin" class="signin">🔒 Some events are hidden — Sam or Emily, tap here once to sign in and show everything</a>`}
+      ${S.editor ? `<span>Showing everything for ${esc((S.user?.name || '').split(' ')[0] || S.user?.email)}</span>` : S.display ? '<span>Showing everything</span>' : `<a href="#" id="signin" class="signin">🔒 Some events are hidden — tap here to show everything</a>`}
     </footer>
+    ${S.pairCode ? `<div class="pair"><div class="card">
+      <h1>Show private events</h1>
+      <p>On Sam’s or Emily’s phone, open the calendar → ⚙︎ Settings → <b>Kitchen display</b>, and type:</p>
+      <div class="code">${esc(S.pairCode.slice(0, 3))} ${esc(S.pairCode.slice(3))}</div>
+      <p class="muted">This screen updates by itself once it’s approved.</p>
+      <a href="#" id="pairCancel">Cancel</a>
+    </div></div>` : ''}
   </div>`;
   document.querySelectorAll('[data-item]').forEach((el) => (el.onclick = (ev) => { ev.stopPropagation(); tick(el.dataset.item); }));
   const si = $('#signin');
-  if (si) si.onclick = (ev) => { ev.preventDefault(); ev.stopPropagation(); cloud.signIn().catch(() => {}); };
+  if (si) si.onclick = (ev) => { ev.preventDefault(); ev.stopPropagation(); startPairing(); };
+  const pc = $('#pairCancel');
+  if (pc) pc.onclick = (ev) => { ev.preventDefault(); ev.stopPropagation(); S.pairCode = ''; paint(); };
   fit();
+}
+
+/* ---------- pairing: show private events without Google sign-in ---------- */
+let pairUnsub = null;
+async function startPairing() {
+  try {
+    const uid = (await cloud.displayUid()) || (await cloud.displaySignIn());
+    S.pairCode = String(Math.floor(100000 + Math.random() * 900000));
+    await cloud.requestPairing(S.space, S.pairCode, uid);
+    paint();
+    if (pairUnsub) pairUnsub();
+    pairUnsub = cloud.watchDisplay(S.space, uid, (ok) => {
+      if (!ok) return;
+      pairUnsub(); pairUnsub = null;
+      S.pairCode = ''; S.display = true; start();
+    });
+  } catch (e) {
+    S.pairCode = '';
+    paint();
+    alert('Couldn’t start pairing: ' + (e.code || e.message) + '\n\nSam: in Firebase → Authentication → Sign-in method, turn on “Anonymous”, and publish the latest firestore.rules.');
+  }
 }
 
 /** Trim what doesn't fit instead of scrolling — nobody scrolls a kitchen screen. */
@@ -300,6 +331,8 @@ setInterval(() => { const hm = utcToWall(new Date()).slice(11, 16); if (hm === '
   if (S.space) store.set('tvSpace', S.space);
   try { cloud = await initCloud(); } catch { app.innerHTML = '<div class="center muted">Couldn’t load. Check the Wi-Fi — retrying…</div>'; return setTimeout(() => location.reload(), 60 * 1000); }
   keepAwake();
+  const duid = await cloud.displayUid();
+  if (duid && S.space) S.display = await cloud.isPairedDisplay(S.space, duid);
   let started = false;
   cloud.onUser(async (u) => {
     S.user = u;
