@@ -65,12 +65,12 @@ service cloud.firestore {
           && request.resource.data.driver.size() < 60;
       }
 
-      // Groceries and chores — anyone with the family link (phones, the kitchen display) can check things off.
+      // Groceries, chores and the kids' morning routine ('am') — anyone with the family link (phones, the kitchen display) can check things off.
       match /items/{itemId} {
         allow get, list: if true;
         allow delete: if true;
         allow create, update: if request.resource.data.keys().hasOnly(['id', 'list', 'text', 'who', 'done', 'doneOn', 'repeat', 'days', 'by', 'at'])
-          && request.resource.data.list in ['shop', 'todo']
+          && request.resource.data.list in ['shop', 'todo', 'am']
           && (!('days' in request.resource.data) || (request.resource.data.days is list && request.resource.data.days.size() <= 7))
           && request.resource.data.text is string
           && request.resource.data.text.size() > 0

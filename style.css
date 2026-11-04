@@ -288,3 +288,7 @@ html, body { overflow-x: hidden; }
 .listseg button { padding-left: 6px; padding-right: 6px; white-space: nowrap; }
 .palette.editing .chorechip[data-chore] { touch-action: auto; border-style: dashed; }
 .chorechip .x { margin-left: 4px; color: var(--muted); font-size: 12px; }
+/* Today: morning routine ↔ chores */
+.modeseg { display: flex; width: 100%; margin: 0 0 8px; }
+.modeseg button { flex: 1; }
+.item .txt .ic { margin-right: 6px; }

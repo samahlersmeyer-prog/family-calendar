@@ -1,11 +1,11 @@
-import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=36';
-import { parseICS, hashId } from './lib/ics.js?v=36';
-import { parseScheduleText } from './lib/schedule-text.js?v=36';
-import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=36';
-import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=36';
-import { initCloud } from './lib/cloud.js?v=36';
-import { CHORE_LIB, choreIcon, choresFor, setChoreDay, DAY_SHORT, DAY_LONG, itemDone, dueOn, repeatLabel as choreRepeat, } from './lib/chores.js?v=36';
-import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=36';
+import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=37';
+import { parseICS, hashId } from './lib/ics.js?v=37';
+import { parseScheduleText } from './lib/schedule-text.js?v=37';
+import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=37';
+import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=37';
+import { initCloud } from './lib/cloud.js?v=37';
+import { CHORE_LIB, choreIcon, choresFor, setChoreDay, DAY_SHORT, DAY_LONG, itemDone, dueOn, repeatLabel as choreRepeat, MORNING_LIB, MORNING_DAYS, autoMode, } from './lib/chores.js?v=37';
+import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=37';
 
 /* ---------- config ---------- */
 const CONFIG = { owner: 'samahlersmeyer-prog', repo: 'family-calendar', branch: 'main' };
@@ -1725,10 +1725,11 @@ const WHO = () => [...kidsList(), 'Mom', 'Dad'];
 const listErr = (err) => toast(/permission/i.test(err.code || err.message) ? 'Lists aren’t switched on yet — Sam needs to update the database rules (see the README).' : err.message, 6000);
 
 function openLists(tab = store.get('listTab') || 'shop') {
-  S.listTab = tab; S.listsOpen = true; S.choreDay = dow(todayWall());
+  S.listTab = tab; S.listsOpen = true; S.choreDay = dow(todayWall()); S.todayMode = autoMode(utcToWall(new Date()));
   const sh = openModal(`
     <div class="head"><div><h2>Lists</h2><p class="help">Shared with Emily and the kitchen display.</p></div><button class="btn icon ghost" data-close aria-label="Close">✕</button></div>
     <div class="seg listseg"><button data-lt="shop">🛒 Groceries</button><button data-lt="board">🗓️ Chore chart</button><button data-lt="todo">✅ Today</button></div>
+    <div class="seg modeseg hidden"><button data-mode="am">☀️ Morning</button><button data-mode="todo">🧹 Chores</button></div>
     <div id="dayStrip" class="daystrip" role="tablist"></div>
     <form id="addItem" class="additem">
       <div class="addrow"><input class="in" name="text" maxlength="190" autocomplete="off" enterkeyhint="done" required><button class="btn primary addbtn" aria-label="Add">＋</button></div>
@@ -1743,7 +1744,10 @@ function openLists(tab = store.get('listTab') || 'shop') {
   $('[data-close]', sh).onclick = closeModal;
   const f = $('#addItem'), opts = $('.choreopts', sh);
   let who = store.get('choreWho') || '';
-  const paintWho = () => $$('[data-who]', sh).forEach((b) => b.classList.toggle('on', b.dataset.who === who));
+  const paintWho = () => $$('[data-who]', sh).forEach((b) => {
+    b.classList.toggle('on', b.dataset.who === who);
+    if (!b.dataset.who) b.textContent = S.listTab === 'todo' && S.todayMode === 'am' ? 'Every kid' : 'Anyone';
+  });
   // Repeat choices follow the day you're looking at: viewing Thursday, a new chore defaults to "Every Thursday".
   const fillRepeat = () => {
     const keep = f.repeat.value, had = f.repeat.options.length, day = DAY_LONG[S.choreDay];
@@ -1763,12 +1767,17 @@ function openLists(tab = store.get('listTab') || 'shop') {
     S.listTab = t; store.set('listTab', t);
     $$('[data-lt]', sh).forEach((b) => b.classList.toggle('on', b.dataset.lt === t));
     $('#dayStrip').classList.toggle('hidden', t !== 'todo');
+    $('.modeseg', sh).classList.toggle('hidden', t !== 'todo');
+    $$('[data-mode]', sh).forEach((b) => b.classList.toggle('on', b.dataset.mode === S.todayMode));
     f.classList.toggle('hidden', t === 'board');
-    f.text.placeholder = t === 'shop' ? 'Add an item (milk, eggs…)' : 'Add a chore…';
-    showOpts(); drawLists();
+    f.text.placeholder = t === 'shop' ? 'Add an item (milk, eggs…)' : S.todayMode === 'am' ? 'Add a morning step (get dressed…)' : 'Add a chore…';
+    // A new morning step goes to every kid on school mornings; a new chore to whoever was picked last.
+    if (t === 'todo') { who = S.todayMode === 'am' ? '' : store.get('choreWho') || ''; f.repeat.value = S.todayMode === 'am' ? 'weekdays' : 'wd'; $('.daypick', sh).classList.add('hidden'); }
+    paintWho(); showOpts(); drawLists();
   };
+  $$('[data-mode]', sh).forEach((b) => (b.onclick = () => { S.todayMode = b.dataset.mode; setTab('todo'); }));
   $$('[data-lt]', sh).forEach((b) => (b.onclick = () => setTab(b.dataset.lt)));
-  $$('[data-who]', sh).forEach((b) => (b.onclick = () => { who = b.dataset.who; store.set('choreWho', who); paintWho(); }));
+  $$('[data-who]', sh).forEach((b) => (b.onclick = () => { who = b.dataset.who; if (S.todayMode !== 'am') store.set('choreWho', who); paintWho(); }));
   f.text.onfocus = f.text.oninput = showOpts;
   f.text.onblur = () => setTimeout(showOpts, 200);
   f.repeat.onchange = () => {
@@ -1782,14 +1791,17 @@ function openLists(tab = store.get('listTab') || 'shop') {
     const r = f.repeat.value;
     const days = r === 'wd' ? [S.choreDay] : r === 'weekdays' ? [1, 2, 3, 4, 5] : $$('.daypick .on', sh).map((b) => +b.dataset.wd);
     if (S.listTab === 'todo' && r === 'pick' && !days.length) return toast('Pick at least one day.');
+    const list = S.listTab === 'todo' ? S.todayMode : S.listTab;
     const texts = S.listTab === 'shop' ? f.text.value.split(/,|\n/).map((x) => x.trim()).filter(Boolean) : [f.text.value.trim()].filter(Boolean);
     if (!texts.length) return;
     f.text.value = ''; f.text.focus();
     const rep = ['wd', 'weekdays', 'pick'].includes(r) ? { repeat: 'days', days } : { repeat: r };
     try {
-      for (const text of texts) {
-        const item = { id: newId(), list: S.listTab, text: text.slice(0, 190), done: false, by: myName() || '', at: Date.now(),
-          ...(S.listTab === 'todo' ? { who, ...rep } : {}) };
+      // Morning steps for "Every kid" become one item per kid, so each kid checks off their own.
+      const whos = list === 'am' && !who ? kidsList() : [who];
+      for (const text of texts) for (const w of whos) {
+        const item = { id: newId(), list, text: text.slice(0, 190), done: false, by: myName() || '', at: Date.now(),
+          ...(S.listTab === 'todo' ? { who: w, ...rep } : {}) };
         S.items = [...S.items, item]; drawLists();
         await cloud.putItem(S.space, item);
       }
@@ -1803,23 +1815,28 @@ function drawLists() {
   if (!box) return;
   if (S.itemsErr) { box.innerHTML = '<p class="help bad">Lists aren’t switched on yet — Sam needs to publish the new database rules (see the README).</p>'; return; }
   if (S.listTab === 'board') return drawBoard(box);
-  const t = S.listTab;
-  const today = dow(todayWall()), wd = t === 'todo' ? S.choreDay ?? today : today, isToday = wd === today;
+  const tab = S.listTab, t = tab === 'todo' ? S.todayMode || 'todo' : tab, daily = tab === 'todo', am = t === 'am';
+  const today = dow(todayWall()), wd = daily ? S.choreDay ?? today : today, isToday = wd === today;
   // Chores: only the ones on for the day picked in the strip. Ticking off only counts for today.
-  const items = S.items.filter((i) => i.list === t && (t !== 'todo' || dueOn(i, wd))).sort((a, b) => (a.at || 0) - (b.at || 0));
+  const items = S.items.filter((i) => i.list === t && (!daily || dueOn(i, wd))).sort((a, b) => (a.at || 0) - (b.at || 0));
   const doneNow = (i) => isToday && itemDone(i);
   const open = items.filter((i) => !doneNow(i)), done = items.filter(doneNow);
   const row = (i) => `<div class="item ${doneNow(i) ? 'done' : ''} ${isToday ? '' : 'plan'}" data-item="${esc(i.id)}">
       <button class="tick" aria-label="${doneNow(i) ? 'Not done' : 'Done'}" ${isToday ? '' : 'disabled'}>${doneNow(i) ? '✓' : ''}</button>
-      <span class="txt">${esc(i.text)}${t === 'todo' && i.repeat && (i.repeat !== 'days' || (i.days || []).length > 1) ? `<small>${esc(choreRepeat(i))}</small>` : ''}</span>
+      <span class="txt">${daily ? `<span class="ic">${choreIcon(i.text)}</span>` : ''}${esc(i.text)}${daily && i.repeat && (i.repeat !== 'days' || (i.days || []).length > 1) ? `<small>${esc(choreRepeat(i))}</small>` : ''}</span>
       <button class="btn icon ghost rm" aria-label="Delete">✕</button></div>`;
-  const strip = t === 'todo' && !isToday && items.length ? `<p class="planhint">${DAY_LONG[wd]}’s chores — check them off on the day.</p>` : '';
-  const groups = t === 'todo'
+  const strip = daily && !isToday && items.length ? `<p class="planhint">${DAY_LONG[wd]}’s ${am ? 'morning routine' : 'chores'} — check them off on the day.</p>` : '';
+  const groups = daily
     ? [...new Set(open.map((i) => i.who || ''))].sort((a, b) => (a === '') - (b === '') || WHO().indexOf(a) - WHO().indexOf(b))
       .map((w) => `<h4>${esc(w || 'Anyone')}</h4>${open.filter((i) => (i.who || '') === w).map(row).join('')}`).join('')
     : open.map(row).join('');
   const clearable = done.filter((i) => !i.repeat);
-  box.innerHTML = strip + (open.length ? groups : `<p class="muted">${t === 'shop' ? 'Nothing on the list.' : isToday && done.length ? 'All done today. 🎉' : `No chores ${isToday ? 'today' : `on ${DAY_SHORT[wd]}`}.`}</p>`)
+  const none = am && !S.items.some((i) => i.list === 'am');
+  const empty = t === 'shop' ? 'Nothing on the list.' : isToday && done.length ? (am ? 'Ready for school! 🎉' : 'All done today. 🎉') : `No ${am ? 'morning routine' : 'chores'} ${isToday ? 'today' : `on ${DAY_SHORT[wd]}`}.`;
+  box.innerHTML = none
+    ? `<p class="muted">No morning routine yet.</p><p class="help">Start everyone with ${MORNING_LIB.map((x) => `${choreIcon(x)} ${esc(x.toLowerCase())}`).join(', ')} on school mornings (Mon–Fri). Add or remove steps after.</p>
+       <div class="actions"><button class="btn primary" id="seedAM">Set up the morning routine</button></div>`
+    : strip + (open.length ? groups : `<p class="muted">${empty}</p>`)
     + (done.length ? `<details class="donebox" ${t === 'shop' ? 'open' : ''}><summary>${done.length} done</summary>${done.map(row).join('')}
       ${clearable.length ? `<div class="actions"><button class="btn" id="clearDone">Clear ${t === 'shop' ? 'checked items' : 'finished to-dos'}</button></div>` : ''}</details>` : '');
   $$('.item', box).forEach((el) => {
@@ -1836,6 +1853,11 @@ function drawLists() {
       try { await cloud.delItem(S.space, i.id); } catch (err) { listErr(err); }
     };
   });
+  if ($('#seedAM')) $('#seedAM').onclick = async () => {
+    const add = kidsList().flatMap((k) => MORNING_LIB.map((text, n) => ({ id: newId(), list: 'am', text, who: k, done: false, repeat: 'days', days: MORNING_DAYS, by: myName() || '', at: Date.now() + n })));
+    S.items = [...S.items, ...add]; drawLists();
+    try { for (const it of add) await cloud.putItem(S.space, it); } catch (err) { listErr(err); }
+  };
   if ($('#clearDone')) $('#clearDone').onclick = async () => {
     const ids = new Set(clearable.map((i) => i.id));
     S.items = S.items.filter((x) => !ids.has(x.id)); drawLists();

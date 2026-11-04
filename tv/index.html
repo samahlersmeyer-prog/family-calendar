@@ -115,6 +115,11 @@
     .chore.done .cw { text-decoration: line-through; }
     .chore .ck { position: absolute; right: -0.25rem; bottom: -0.25rem; width: 1.1rem; height: 1.1rem; border-radius: 50%; background: #22c55e; color: #fff; font-size: 0.7rem; display: grid; place-items: center; }
 
+    .modes { display: flex; gap: 0.3rem; background: var(--line); border-radius: 999px; padding: 0.2rem; margin-bottom: 0.6rem; }
+    .modes button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 0.35rem; font: inherit; font-size: 1.05rem; font-weight: 800; border: 0; border-radius: 999px; padding: 0.45rem 0.6rem; background: transparent; color: var(--muted); cursor: pointer; }
+    .modes button.on { background: var(--card); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.15); }
+    .modes .cem { width: 1.2rem; height: 1.2rem; }
+
     /* Narrow / portrait screens: stack the two columns */
     @media (max-aspect-ratio: 1/1) {
       :root { font-size: clamp(12px, 2.6vw, 28px); }
@@ -125,6 +130,6 @@
 </head>
 <body>
   <div id="app"><div class="center muted">Loading…</div></div>
-  <script type="module" src="tv.js?v=16"></script>
+  <script type="module" src="tv.js?v=17"></script>
 </body>
 </html>

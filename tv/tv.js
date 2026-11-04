@@ -3,11 +3,11 @@
 // Shows practices plus everything relatives see (add ?practices=0 for a relative's screen);
 // To include the Family calendar and 🔒 events (matching Alexa), tap the 🔒 line: the screen shows a code
 // that Sam or Emily type in Settings on their phone. No Google sign-in needed on the Echo.
-import { initCloud } from '../lib/cloud.js?v=36';
-import { itemDone, dueToday, choreIconImg } from '../lib/chores.js?v=36';
-import { decryptJSON } from '../lib/crypto.js?v=36';
-import { expandAll, kindOf, KIDS } from '../lib/events.js?v=36';
-import { todayWall, utcToWall, addDays, addMinutes, diffMinutes, dow } from '../lib/tz.js?v=36';
+import { initCloud } from '../lib/cloud.js?v=37';
+import { itemDone, dueToday, choreIconImg, autoMode } from '../lib/chores.js?v=37';
+import { decryptJSON } from '../lib/crypto.js?v=37';
+import { expandAll, kindOf, KIDS } from '../lib/events.js?v=37';
+import { todayWall, utcToWall, addDays, addMinutes, diffMinutes, dow } from '../lib/tz.js?v=37';
 
 const RAW = 'https://raw.githubusercontent.com/samahlersmeyer-prog/family-calendar/main/';
 const FRIENDS = { id: 'friends', name: 'Family & Friends', color: '#0891b2' };
@@ -113,12 +113,21 @@ async function start() {
 }
 
 /* ---------- groceries & chores (tap to check off) ---------- */
+// Morning routine before 11am, chores after. Tapping the toggle switches; it goes back to automatic after 2 hours.
+const emo = (code) => `<img class="cem" src="../emoji/${code}.svg" alt="" width="20" height="20">`;
+function listMode() {
+  if (S.modePick && Date.now() < S.modePick.until) return S.modePick.mode;
+  return autoMode(utcToWall(new Date()));
+}
+const daily = (l) => S.items.filter((i) => i.list === l && dueToday(i));
 function listsCol() {
   if (innerWidth < 900 || innerWidth <= innerHeight) return '';
-  const open = S.items.filter((i) => !itemDone(i) && (i.list !== 'todo' || dueToday(i)));
-  const chores = open.filter((i) => i.list === 'todo'), shop = open.filter((i) => i.list === 'shop');
-  const doneToday = S.items.filter((i) => i.list === 'todo' && dueToday(i) && itemDone(i) && i.doneOn === todayWall());
-  if (!chores.length && !shop.length && !doneToday.length) return '';
+  const hasAM = daily('am').length > 0, hasChores = daily('todo').length > 0;
+  const mode = hasAM && hasChores ? listMode() : hasAM ? 'am' : 'todo';
+  const open = S.items.filter((i) => !itemDone(i) && (i.list === 'shop' || (i.list === mode && dueToday(i))));
+  const chores = open.filter((i) => i.list === mode), shop = open.filter((i) => i.list === 'shop');
+  const doneToday = daily(mode).filter((i) => itemDone(i) && i.doneOn === todayWall());
+  if (!chores.length && !shop.length && !doneToday.length && !(hasAM && hasChores)) return '';
   const row = (i, done) => `<div class="item ${done ? 'done' : ''}" data-item="${esc(i.id)}"><span class="box">${done ? '✓' : ''}</span><span class="txt">${i.who ? `<b>${esc(i.who)}:</b> ` : ''}${i.list === 'todo' ? choreIconImg(i.text, '../') : ''}${esc(i.text)}</span></div>`;
   // Chores grouped by kid: one card each, with a tap-to-check chip per chore.
   const kidOrder = [...(S.cal.kids || KIDS), 'Mom', 'Dad'];
@@ -128,9 +137,10 @@ function listsCol() {
   // One row per kid: name, then a button per chore with its emoji and name.
   const kidCard = (w) => { const mine = allChores.filter((i) => (i.who || '') === w).sort((a, b) => (a.at || 0) - (b.at || 0));
     const left = mine.filter((i) => !itemDone(i)).length;
-    return `<div class="kidchores ${left ? '' : 'alldone'}"><div class="kn">${esc(w || 'Anyone')}${left ? '' : '<small>done ✓</small>'}</div><div class="chips">${mine.map(chip).join('')}</div></div>`; };
+    return `<div class="kidchores ${left ? '' : 'alldone'}"><div class="kn">${esc(w || 'Anyone')}${left ? '' : `<small>${mode === 'am' ? 'ready ✓' : 'done ✓'}</small>`}</div><div class="chips">${mine.map(chip).join('')}</div></div>`; };
   return `<div class="col lists">
-    ${allChores.length ? `<h2>Today’s chores</h2><div class="list">${whos.map(kidCard).join('')}</div>` : ''}
+    ${hasAM && hasChores ? `<div class="modes"><button data-mode="am" class="${mode === 'am' ? 'on' : ''}">${emo('2600')}Morning</button><button data-mode="todo" class="${mode === 'todo' ? 'on' : ''}">${emo('1f9f9')}Chores</button></div>` : ''}
+    ${allChores.length ? `<h2>${mode === 'am' ? 'Morning routine' : 'Today’s chores'}</h2><div class="list">${whos.map(kidCard).join('')}</div>` : ''}
     ${shop.length ? `<h2>Groceries</h2><div class="list">${shop.map((i) => row(i)).join('')}</div>` : ''}
   </div>`;
 }
@@ -239,6 +249,7 @@ function paint() {
     </div></div>` : ''}
   </div>`;
   document.querySelectorAll('[data-item]').forEach((el) => (el.onclick = (ev) => { ev.stopPropagation(); tick(el.dataset.item); }));
+  document.querySelectorAll('[data-mode]').forEach((el) => (el.onclick = (ev) => { ev.stopPropagation(); S.modePick = { mode: el.dataset.mode, until: Date.now() + 2 * 3600 * 1000 }; paint(); }));
   const si = $('#signin');
   if (si) si.onclick = (ev) => { ev.preventDefault(); ev.stopPropagation(); startPairing(); };
   const pc = $('#pairCancel');
