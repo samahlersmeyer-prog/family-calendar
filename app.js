@@ -1,10 +1,11 @@
-import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=27';
-import { parseICS, hashId } from './lib/ics.js?v=27';
-import { parseScheduleText } from './lib/schedule-text.js?v=27';
-import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=27';
-import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=27';
-import { initCloud } from './lib/cloud.js?v=27';
-import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=27';
+import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=28';
+import { parseICS, hashId } from './lib/ics.js?v=28';
+import { parseScheduleText } from './lib/schedule-text.js?v=28';
+import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=28';
+import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=28';
+import { initCloud } from './lib/cloud.js?v=28';
+import { REPEAT_CHORE, DAY_SHORT, itemDone, dueOn, repeatLabel as choreRepeat, starterChores } from './lib/chores.js?v=28';
+import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=28';
 
 /* ---------- config ---------- */
 const CONFIG = { owner: 'samahlersmeyer-prog', repo: 'family-calendar', branch: 'main' };
@@ -1720,18 +1721,10 @@ addEventListener('paste', (e) => {
 
 /* ---------- lists: groceries and chores ---------- */
 const WHO = () => [...kidsList(), 'Mom', 'Dad'];
-const REPEAT_CHORE = { '': 'Once', day: 'Every day', week: 'Every week' };
-const weekStart = (d) => addDays(d, -dow(d));
-/** Done? Repeating chores reset on their own each day or week. */
-function itemDone(i) {
-  if (!i.repeat) return !!i.done;
-  const t = todayWall();
-  return !!i.doneOn && (i.repeat === 'day' ? i.doneOn === t : i.doneOn >= weekStart(t));
-}
 const listErr = (err) => toast(/permission/i.test(err.code || err.message) ? 'Lists aren’t switched on yet — Sam needs to update the database rules (see the README).' : err.message, 6000);
 
 function openLists(tab = store.get('listTab') || 'shop') {
-  S.listTab = tab; S.listsOpen = true;
+  S.listTab = tab; S.listsOpen = true; S.choreDay = dow(todayWall());
   const sh = openModal(`
     <div class="head"><div><h2>Lists</h2><p class="help">Shared with Emily and the kitchen display. Changes show everywhere right away.</p></div><button class="btn icon ghost" data-close aria-label="Close">✕</button></div>
     <div class="seg listseg"><button data-lt="shop">🛒 Groceries</button><button data-lt="todo">✅ Chores &amp; to-dos</button></div>
@@ -1739,6 +1732,7 @@ function openLists(tab = store.get('listTab') || 'shop') {
       <input class="in" name="text" maxlength="190" autocomplete="off" required>
       <div class="two todoonly"><select class="in" name="who"><option value="">Anyone</option>${WHO().map((w) => `<option>${esc(w)}</option>`).join('')}</select>
         <select class="in" name="repeat">${Object.entries(REPEAT_CHORE).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div>
+      <div class="daypick hidden" role="group" aria-label="Which days">${DAY_SHORT.map((d, n) => `<button type="button" data-wd="${n}">${d}</button>`).join('')}</div>
       <button class="btn primary">Add</button>
     </form>
     <div id="listBody"></div>`);
@@ -1749,19 +1743,29 @@ function openLists(tab = store.get('listTab') || 'shop') {
     S.listTab = t; store.set('listTab', t);
     $$('[data-lt]', sh).forEach((b) => b.classList.toggle('on', b.dataset.lt === t));
     $('.todoonly', sh).classList.toggle('hidden', t !== 'todo');
+    $('.daypick', sh).classList.toggle('hidden', t !== 'todo' || f.repeat.value !== 'days');
     f.text.placeholder = t === 'shop' ? 'Add an item (milk, eggs…)' : 'Add a chore or to-do';
     drawLists();
   };
   $$('[data-lt]', sh).forEach((b) => (b.onclick = () => setTab(b.dataset.lt)));
+  // "Certain days": start with the day being viewed picked, tap to add more.
+  f.repeat.onchange = () => {
+    const pick = f.repeat.value === 'days';
+    $('.daypick', sh).classList.toggle('hidden', !pick);
+    if (pick && !$('.daypick .on', sh)) $(`.daypick [data-wd="${S.choreDay}"]`, sh).classList.add('on');
+  };
+  $$('.daypick button', sh).forEach((b) => (b.onclick = () => b.classList.toggle('on')));
   f.onsubmit = async (ev) => {
     ev.preventDefault();
+    const days = $$('.daypick .on', sh).map((b) => +b.dataset.wd);
+    if (S.listTab === 'todo' && f.repeat.value === 'days' && !days.length) return toast('Pick at least one day.');
     const texts = S.listTab === 'shop' ? f.text.value.split(/,|\n/).map((x) => x.trim()).filter(Boolean) : [f.text.value.trim()].filter(Boolean);
     if (!texts.length) return;
     f.text.value = ''; f.text.focus();
     try {
       for (const text of texts) {
         const item = { id: newId(), list: S.listTab, text: text.slice(0, 190), done: false, by: myName() || '', at: Date.now(),
-          ...(S.listTab === 'todo' ? { who: f.who.value, repeat: f.repeat.value } : {}) };
+          ...(S.listTab === 'todo' ? { who: f.who.value, repeat: f.repeat.value, ...(f.repeat.value === 'days' ? { days } : {}) } : {}) };
         S.items = [...S.items, item]; drawLists();
         await cloud.putItem(S.space, item);
       }
@@ -1775,23 +1779,39 @@ function drawLists() {
   if (!box) return;
   if (S.itemsErr) { box.innerHTML = '<p class="help bad">Lists aren’t switched on yet — Sam needs to publish the new database rules (see the README).</p>'; return; }
   const t = S.listTab;
-  const items = S.items.filter((i) => i.list === t).sort((a, b) => (a.at || 0) - (b.at || 0));
-  const open = items.filter((i) => !itemDone(i)), done = items.filter(itemDone);
-  const row = (i) => `<div class="item ${itemDone(i) ? 'done' : ''}" data-item="${esc(i.id)}">
-      <button class="tick" aria-label="${itemDone(i) ? 'Not done' : 'Done'}">${itemDone(i) ? '✓' : ''}</button>
-      <span class="txt">${esc(i.text)}${t === 'todo' && (i.who || i.repeat) ? `<small>${[i.who, REPEAT_CHORE[i.repeat || ''] !== 'Once' ? REPEAT_CHORE[i.repeat] : ''].filter(Boolean).map(esc).join(' · ')}</small>` : ''}</span>
+  const today = dow(todayWall()), wd = t === 'todo' ? S.choreDay ?? today : today, isToday = wd === today;
+  // Chores: only the ones on for the day picked in the strip. Ticking off only counts for today.
+  const items = S.items.filter((i) => i.list === t && (t !== 'todo' || dueOn(i, wd))).sort((a, b) => (a.at || 0) - (b.at || 0));
+  const doneNow = (i) => isToday && itemDone(i);
+  const open = items.filter((i) => !doneNow(i)), done = items.filter(doneNow);
+  const row = (i) => `<div class="item ${doneNow(i) ? 'done' : ''} ${isToday ? '' : 'plan'}" data-item="${esc(i.id)}">
+      <button class="tick" aria-label="${doneNow(i) ? 'Not done' : 'Done'}" ${isToday ? '' : 'disabled'}>${doneNow(i) ? '✓' : ''}</button>
+      <span class="txt">${esc(i.text)}${t === 'todo' && (i.who || i.repeat) ? `<small>${[i.who, choreRepeat(i)].filter(Boolean).map(esc).join(' · ')}</small>` : ''}</span>
       <button class="btn icon ghost rm" aria-label="Delete">✕</button></div>`;
+  const strip = t === 'todo' ? `<div class="daystrip" role="tablist">${DAY_SHORT.map((d, n) => `<button data-day="${n}" class="${n === wd ? 'on' : ''}">${n === today ? 'Today' : d}</button>`).join('')}</div>` : '';
   const groups = t === 'todo'
     ? [...new Set(open.map((i) => i.who || ''))].sort((a, b) => (a === '') - (b === '') || WHO().indexOf(a) - WHO().indexOf(b))
       .map((w) => `<h4>${esc(w || 'Anyone')}</h4>${open.filter((i) => (i.who || '') === w).map(row).join('')}`).join('')
     : open.map(row).join('');
+  const hasChores = S.items.some((i) => i.list === 'todo' && i.repeat === 'days');
+  const starter = t === 'todo' && !hasChores ? `<div class="actions"><button class="btn" id="starterChores">✨ Add suggested chores for the kids</button></div>` : '';
   const clearable = done.filter((i) => !i.repeat);
-  box.innerHTML = (open.length ? groups : `<p class="muted">${t === 'shop' ? 'Nothing on the list.' : 'No chores right now. 🎉'}</p>`)
+  box.innerHTML = strip + (open.length ? groups : `<p class="muted">${t === 'shop' ? 'Nothing on the list.' : isToday && done.length ? 'All done today. 🎉' : `No chores ${isToday ? 'today' : `on ${DAY_SHORT[wd]}`}.`}</p>`)
     + (done.length ? `<details class="donebox" ${t === 'shop' ? 'open' : ''}><summary>${done.length} done</summary>${done.map(row).join('')}
-      ${clearable.length ? `<div class="actions"><button class="btn" id="clearDone">Clear ${t === 'shop' ? 'checked items' : 'finished to-dos'}</button></div>` : ''}</details>` : '');
+      ${clearable.length ? `<div class="actions"><button class="btn" id="clearDone">Clear ${t === 'shop' ? 'checked items' : 'finished to-dos'}</button></div>` : ''}</details>` : '') + starter;
+  $$('[data-day]', box).forEach((b) => (b.onclick = () => { S.choreDay = +b.dataset.day; drawLists(); }));
+  if ($('#starterChores')) $('#starterChores').onclick = async () => {
+    const list = starterChores(kidsList());
+    if (!list.length || !confirm(`Add ${list.length} suggested chores, spread across the week? You can delete or change any of them.`)) return;
+    const now = Date.now();
+    const add = list.map((c, n) => ({ id: newId(), list: 'todo', done: false, by: myName() || '', at: now + n, ...c }));
+    S.items = [...S.items, ...add]; drawLists();
+    try { for (const i of add) await cloud.putItem(S.space, i); toast('Chores added — tap a day to see who does what.'); } catch (err) { listErr(err); }
+  };
   $$('.item', box).forEach((el) => {
     const i = S.items.find((x) => x.id === el.dataset.item);
     $('.tick', el).onclick = async () => {
+      if (!isToday) return;
       const nowDone = !itemDone(i);
       const up = i.repeat ? { ...i, doneOn: nowDone ? todayWall() : null, by: myName() || i.by || '' } : { ...i, done: nowDone, doneOn: nowDone ? todayWall() : null };
       S.items = S.items.map((x) => (x.id === i.id ? up : x)); drawLists();

@@ -7,7 +7,7 @@ A shared family calendar that runs free on GitHub Pages.
 - **Team feeds**: paste a GameChanger, SportsYou, TeamSnap or Google Calendar sync link into a calendar in Settings. A GitHub Action pulls them every 2 hours.
 - **Email**: ask Claude to "scan my email for schedules" and it adds what it finds (via `scripts/add-events.mjs`).
 - **Practices hidden for relatives**: every event has a type (game, practice, concert/program, church, school, other), guessed from the title or picked when you add it. Relatives see everything except practices unless they tap **Practices**; Sam & Emily see it all.
-- **Lists**: a shared grocery list and chores (assign to a kid, once / every day / every week). They show on the kitchen display, where anyone can tap to check things off.
+- **Lists**: a shared grocery list and chores (assign to a kid, once / every day / certain days / every week). The chores tab has a Sun–Sat strip to see each day's chores, and a one-tap set of suggested chores by age. The kitchen display shows today's chores and groceries, and anyone can tap to check things off.
 - **Notifications**: each phone can turn on reminders (30 min, 1 hr, 2 hr or the evening before), alerts when a time or place changes or something is cancelled, and a Sunday-night “week ahead”. On iPhone this only works from the Home Screen app.
 - **Weekly email**: every Sunday evening relatives can get an email with the week’s games, concerts, church and school events (Settings → Weekly email).
 - **Private**: all calendar data is encrypted with the family passcode before it's saved to this repo. Relatives get the link + passcode and can view; editors also add a GitHub token on their device.
