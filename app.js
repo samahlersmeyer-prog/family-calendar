@@ -1,11 +1,11 @@
-import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=32';
-import { parseICS, hashId } from './lib/ics.js?v=32';
-import { parseScheduleText } from './lib/schedule-text.js?v=32';
-import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=32';
-import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=32';
-import { initCloud } from './lib/cloud.js?v=32';
-import { CHORE_LIB, choreIcon, choresFor, setChoreDay, DAY_SHORT, DAY_LONG, itemDone, dueOn, repeatLabel as choreRepeat, } from './lib/chores.js?v=32';
-import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=32';
+import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=33';
+import { parseICS, hashId } from './lib/ics.js?v=33';
+import { parseScheduleText } from './lib/schedule-text.js?v=33';
+import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=33';
+import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=33';
+import { initCloud } from './lib/cloud.js?v=33';
+import { CHORE_LIB, choreIcon, choresFor, setChoreDay, DAY_SHORT, DAY_LONG, itemDone, dueOn, repeatLabel as choreRepeat, } from './lib/chores.js?v=33';
+import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=33';
 
 /* ---------- config ---------- */
 const CONFIG = { owner: 'samahlersmeyer-prog', repo: 'family-calendar', branch: 'main' };
@@ -1844,8 +1844,15 @@ function drawLists() {
 
 /* ---------- chore chart: kids down the side, days across, chores dropped into the boxes ---------- */
 const chartKids = () => kidsList();
+// Your own chores, saved on this phone as a list. (Older saves were plain text like "Clean attic,Fold towels".)
+function customChores() {
+  const raw = store.get('choreLib') || '';
+  let list;
+  try { list = JSON.parse(raw); } catch { list = raw.split(','); }
+  return (Array.isArray(list) ? list : []).map((c) => String(c).trim()).filter((c) => c.length > 1);
+}
 function choreLib() {
-  const custom = store.get('choreLib') || [];
+  const custom = customChores();
   const used = S.items.filter((i) => i.list === 'todo' && i.who && (i.repeat === 'days' || i.repeat === 'day')).map((i) => i.text);
   const seen = new Set();
   return [...CHORE_LIB, ...custom, ...used].filter((c) => { const k = c.trim().toLowerCase(); return !seen.has(k) && seen.add(k); });
@@ -1879,7 +1886,7 @@ function drawBoard(box) {
   $('#newChore').onclick = () => {
     const name = (prompt('New chore (e.g. Fold towels)') || '').trim().slice(0, 60);
     if (!name) return;
-    store.set('choreLib', [...(store.get('choreLib') || []), name]);
+    store.set('choreLib', JSON.stringify([...customChores(), name]));
     S.boardChore = name; drawLists();
   };
   if ($('#unsel')) $('#unsel').onclick = () => select('');
