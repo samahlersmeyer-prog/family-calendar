@@ -3,11 +3,11 @@
 // Shows practices plus everything relatives see (add ?practices=0 for a relative's screen);
 // To include the Family calendar and 🔒 events (matching Alexa), tap the 🔒 line: the screen shows a code
 // that Sam or Emily type in Settings on their phone. No Google sign-in needed on the Echo.
-import { initCloud } from '../lib/cloud.js?v=34';
-import { itemDone, dueToday, choreIconImg } from '../lib/chores.js?v=34';
-import { decryptJSON } from '../lib/crypto.js?v=34';
-import { expandAll, kindOf } from '../lib/events.js?v=34';
-import { todayWall, utcToWall, addDays, addMinutes, diffMinutes, dow } from '../lib/tz.js?v=34';
+import { initCloud } from '../lib/cloud.js?v=35';
+import { itemDone, dueToday, choreIconImg } from '../lib/chores.js?v=35';
+import { decryptJSON } from '../lib/crypto.js?v=35';
+import { expandAll, kindOf, KIDS } from '../lib/events.js?v=35';
+import { todayWall, utcToWall, addDays, addMinutes, diffMinutes, dow } from '../lib/tz.js?v=35';
 
 const RAW = 'https://raw.githubusercontent.com/samahlersmeyer-prog/family-calendar/main/';
 const FRIENDS = { id: 'friends', name: 'Family & Friends', color: '#0891b2' };
@@ -120,8 +120,16 @@ function listsCol() {
   const doneToday = S.items.filter((i) => i.list === 'todo' && dueToday(i) && itemDone(i) && i.doneOn === todayWall());
   if (!chores.length && !shop.length && !doneToday.length) return '';
   const row = (i, done) => `<div class="item ${done ? 'done' : ''}" data-item="${esc(i.id)}"><span class="box">${done ? '✓' : ''}</span><span class="txt">${i.who ? `<b>${esc(i.who)}:</b> ` : ''}${i.list === 'todo' ? choreIconImg(i.text, '../') : ''}${esc(i.text)}</span></div>`;
+  // Chores grouped by kid: one card each, with a tap-to-check chip per chore.
+  const kidOrder = [...(S.cal.kids || KIDS), 'Mom', 'Dad'];
+  const allChores = [...chores, ...doneToday];
+  const whos = [...new Set(allChores.map((i) => i.who || ''))].sort((a, b) => (a === '') - (b === '') || kidOrder.indexOf(a) - kidOrder.indexOf(b));
+  const chip = (i) => { const done = itemDone(i); return `<span class="chore ${done ? 'done' : ''}" data-item="${esc(i.id)}">${choreIconImg(i.text, '../')}${esc(i.text)}${done ? ' ✓' : ''}</span>`; };
+  const kidCard = (w) => { const mine = allChores.filter((i) => (i.who || '') === w).sort((a, b) => (a.at || 0) - (b.at || 0));
+    const left = mine.filter((i) => !itemDone(i)).length;
+    return `<div class="kidchores ${left ? '' : 'alldone'}"><div class="kn">${esc(w || 'Anyone')}${left ? '' : ' <small>· all done ✓</small>'}</div><div class="chips">${mine.map(chip).join('')}</div></div>`; };
   return `<div class="col lists">
-    ${chores.length || doneToday.length ? `<h2>Today’s chores</h2><div class="list">${chores.sort((a, b) => (a.who || '~').localeCompare(b.who || '~')).map((i) => row(i)).join('')}${doneToday.map((i) => row(i, true)).join('')}</div>` : ''}
+    ${allChores.length ? `<h2>Today’s chores</h2><div class="list">${whos.map(kidCard).join('')}</div>` : ''}
     ${shop.length ? `<h2>Groceries</h2><div class="list">${shop.map((i) => row(i)).join('')}</div>` : ''}
   </div>`;
 }

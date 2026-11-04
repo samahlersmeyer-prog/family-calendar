@@ -1,11 +1,11 @@
-import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=34';
-import { parseICS, hashId } from './lib/ics.js?v=34';
-import { parseScheduleText } from './lib/schedule-text.js?v=34';
-import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=34';
-import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=34';
-import { initCloud } from './lib/cloud.js?v=34';
-import { CHORE_LIB, choreIcon, choresFor, setChoreDay, DAY_SHORT, DAY_LONG, itemDone, dueOn, repeatLabel as choreRepeat, } from './lib/chores.js?v=34';
-import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=34';
+import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=35';
+import { parseICS, hashId } from './lib/ics.js?v=35';
+import { parseScheduleText } from './lib/schedule-text.js?v=35';
+import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=35';
+import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=35';
+import { initCloud } from './lib/cloud.js?v=35';
+import { CHORE_LIB, choreIcon, choresFor, setChoreDay, DAY_SHORT, DAY_LONG, itemDone, dueOn, repeatLabel as choreRepeat, } from './lib/chores.js?v=35';
+import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=35';
 
 /* ---------- config ---------- */
 const CONFIG = { owner: 'samahlersmeyer-prog', repo: 'family-calendar', branch: 'main' };
