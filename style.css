@@ -286,3 +286,5 @@ html, body { overflow-x: hidden; }
 .ccell .em { font-size: 17px; line-height: 1.15; touch-action: none; cursor: grab; }
 .dragghost { position: fixed; left: 0; top: 0; z-index: 9999; pointer-events: none; width: 48px; height: 48px; display: grid; place-items: center; font-size: 28px; background: var(--card); border: 2px solid var(--accent); border-radius: 50%; box-shadow: 0 6px 18px rgba(0,0,0,.35); }
 .listseg button { padding-left: 6px; padding-right: 6px; white-space: nowrap; }
+.palette.editing .chorechip[data-chore] { touch-action: auto; border-style: dashed; }
+.chorechip .x { margin-left: 4px; color: var(--muted); font-size: 12px; }

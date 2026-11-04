@@ -3,11 +3,11 @@
 // Shows practices plus everything relatives see (add ?practices=0 for a relative's screen);
 // To include the Family calendar and 🔒 events (matching Alexa), tap the 🔒 line: the screen shows a code
 // that Sam or Emily type in Settings on their phone. No Google sign-in needed on the Echo.
-import { initCloud } from '../lib/cloud.js?v=33';
-import { itemDone, dueToday, choreIconImg } from '../lib/chores.js?v=33';
-import { decryptJSON } from '../lib/crypto.js?v=33';
-import { expandAll, kindOf } from '../lib/events.js?v=33';
-import { todayWall, utcToWall, addDays, addMinutes, diffMinutes, dow } from '../lib/tz.js?v=33';
+import { initCloud } from '../lib/cloud.js?v=34';
+import { itemDone, dueToday, choreIconImg } from '../lib/chores.js?v=34';
+import { decryptJSON } from '../lib/crypto.js?v=34';
+import { expandAll, kindOf } from '../lib/events.js?v=34';
+import { todayWall, utcToWall, addDays, addMinutes, diffMinutes, dow } from '../lib/tz.js?v=34';
 
 const RAW = 'https://raw.githubusercontent.com/samahlersmeyer-prog/family-calendar/main/';
 const FRIENDS = { id: 'friends', name: 'Family & Friends', color: '#0891b2' };

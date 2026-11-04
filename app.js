@@ -1,11 +1,11 @@
-import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=33';
-import { parseICS, hashId } from './lib/ics.js?v=33';
-import { parseScheduleText } from './lib/schedule-text.js?v=33';
-import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=33';
-import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=33';
-import { initCloud } from './lib/cloud.js?v=33';
-import { CHORE_LIB, choreIcon, choresFor, setChoreDay, DAY_SHORT, DAY_LONG, itemDone, dueOn, repeatLabel as choreRepeat, } from './lib/chores.js?v=33';
-import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=33';
+import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=34';
+import { parseICS, hashId } from './lib/ics.js?v=34';
+import { parseScheduleText } from './lib/schedule-text.js?v=34';
+import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=34';
+import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=34';
+import { initCloud } from './lib/cloud.js?v=34';
+import { CHORE_LIB, choreIcon, choresFor, setChoreDay, DAY_SHORT, DAY_LONG, itemDone, dueOn, repeatLabel as choreRepeat, } from './lib/chores.js?v=34';
+import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=34';
 
 /* ---------- config ---------- */
 const CONFIG = { owner: 'samahlersmeyer-prog', repo: 'family-calendar', branch: 'main' };
@@ -218,8 +218,9 @@ async function start() {
   const spaceReady = new Promise((res) => {
     unsubs.push(cloud.watchSpace(S.space, (d, fromCache) => {
       if (!d) { if (fromCache) return; res(false); return; }
-      Object.assign(S.cal, { title: d.title, calendars: d.calendars || [], editors: d.editors || [], familyCode: d.familyCode, codeSet: d.codeSet });
+      Object.assign(S.cal, { title: d.title, calendars: d.calendars || [], editors: d.editors || [], familyCode: d.familyCode, codeSet: d.codeSet, choreLib: d.choreLib });
       res(true); if (!first) paint();
+      if (S.listsOpen && S.listTab === 'board') drawLists();
     }, () => res(false)));
   });
   const eventsReady = new Promise((res) => {
@@ -1851,11 +1852,22 @@ function customChores() {
   try { list = JSON.parse(raw); } catch { list = raw.split(','); }
   return (Array.isArray(list) ? list : []).map((c) => String(c).trim()).filter((c) => c.length > 1);
 }
+// The chore list is shared with Emily: it lives with the calendar (choreLib), not on one phone.
+// The first time, it starts from the built-in chores plus any chores added on this phone before.
+function sharedChores() {
+  if (Array.isArray(S.cal.choreLib)) return S.cal.choreLib;
+  const seen = new Set();
+  return [...CHORE_LIB, ...customChores()].filter((c) => { const k = c.trim().toLowerCase(); return !seen.has(k) && seen.add(k); });
+}
+async function saveChoreLib(list) {
+  S.cal.choreLib = list; drawLists();
+  try { await cloud.updateSpace(S.space, { choreLib: list }); store.set('choreLib', null); }
+  catch (err) { toast('Couldn’t save the chore list: ' + (err.code || err.message), 5000); }
+}
 function choreLib() {
-  const custom = customChores();
   const used = S.items.filter((i) => i.list === 'todo' && i.who && (i.repeat === 'days' || i.repeat === 'day')).map((i) => i.text);
   const seen = new Set();
-  return [...CHORE_LIB, ...custom, ...used].filter((c) => { const k = c.trim().toLowerCase(); return !seen.has(k) && seen.add(k); });
+  return [...sharedChores(), ...used].filter((c) => { const k = c.trim().toLowerCase(); return !seen.has(k) && seen.add(k); });
 }
 async function applyChore(changes) {
   for (const c of changes) {
@@ -1870,12 +1882,15 @@ function choreOn(kid, chore, wds, on) { return setChoreDay(S.items, kid, chore, 
 const hasChore = (kid, chore, wd) => choresFor(S.items, kid, wd).some((i) => i.text.trim().toLowerCase() === chore.trim().toLowerCase());
 
 function drawBoard(box) {
+  // Move chores added on this phone (before the list was shared) into the shared list, once.
+  if (!Array.isArray(S.cal.choreLib) && customChores().length && !S.choreMigrating) { S.choreMigrating = true; saveChoreLib(sharedChores()); return; }
   const kids = chartKids(), today = dow(todayWall()), sel = S.boardChore || '';
   const days = [0, 1, 2, 3, 4, 5, 6];
   box.innerHTML = `
     <p class="help">${sel ? `<b>${esc(choreIcon(sel))} ${esc(sel)}</b>: tap a box, or swipe across a row to fill several days. Tap or swipe again to take it off. Tap a name for every day.` : 'Tap a chore, then tap or swipe across the days. Or drag a chore into a box, and drag one in a box to move it.'}</p>
-    <div class="palette">${choreLib().map((c) => `<button class="chorechip ${c === sel ? 'on' : ''}" data-chore="${esc(c)}"><span>${choreIcon(c)}</span>${esc(c)}</button>`).join('')}
-      <button class="chorechip add" id="newChore">＋ New chore</button></div>
+    <div class="palette ${S.choreEdit ? 'editing' : ''}">${choreLib().map((c) => `<button class="chorechip ${c === sel ? 'on' : ''}" data-chore="${esc(c)}"><span>${choreIcon(c)}</span>${esc(c)}${S.choreEdit ? '<b class="x">✕</b>' : ''}</button>`).join('')}
+      ${S.choreEdit ? '' : '<button class="chorechip add" id="newChore">＋ New chore</button>'}
+      <button class="chorechip add" id="editChores">${S.choreEdit ? 'Done editing' : '✎ Edit list'}</button></div>
     <div class="chart ${sel ? 'paint' : ''}">
       <div class="corner"></div>${days.map((d) => `<div class="dh ${d === today ? 'today' : ''}">${DAY_SHORT[d].slice(0, d === 4 || d === 2 ? 2 : 1)}</div>`).join('')}
       ${kids.map((k) => `<button class="kidname" data-kid="${esc(k)}">${esc(k)}</button>${days.map((d) => `<div class="ccell ${d === today ? 'today' : ''} ${sel && hasChore(k, sel, d) ? 'has' : ''}" data-kid="${esc(k)}" data-day="${d}">${choresFor(S.items, k, d).map((i) => `<span class="em" data-chore="${esc(i.text)}" title="${esc(i.text)}">${choreIcon(i.text)}</span>`).join('')}</div>`).join('')}`).join('')}
@@ -1883,11 +1898,11 @@ function drawBoard(box) {
     ${sel ? `<div class="actions"><button class="btn" id="unsel">Done</button></div>` : ''}`;
 
   const select = (c) => { S.boardChore = S.boardChore === c ? '' : c; drawLists(); };
-  $('#newChore').onclick = () => {
+  if ($('#newChore')) $('#newChore').onclick = () => {
     const name = (prompt('New chore (e.g. Fold towels)') || '').trim().slice(0, 60);
     if (!name) return;
-    store.set('choreLib', JSON.stringify([...customChores(), name]));
-    S.boardChore = name; drawLists();
+    S.boardChore = name;
+    if (!sharedChores().some((c) => c.toLowerCase() === name.toLowerCase())) saveChoreLib([...sharedChores(), name]); else drawLists();
   };
   if ($('#unsel')) $('#unsel').onclick = () => select('');
   $$('.kidname', box).forEach((b) => (b.onclick = () => {
@@ -1943,7 +1958,15 @@ function drawBoard(box) {
     };
     addEventListener('pointermove', move, { passive: false }); addEventListener('pointerup', up); addEventListener('pointercancel', up);
   };
-  $$('.chorechip[data-chore]', box).forEach((b) => (b.onpointerdown = (e) => startDrag(e, b.dataset.chore, null)));
+  $('#editChores').onclick = () => { S.choreEdit = !S.choreEdit; S.boardChore = ''; drawLists(); };
+  if (S.choreEdit) {
+    $$('.chorechip[data-chore]', box).forEach((b) => (b.onclick = () => {
+      const c = b.dataset.chore, k = c.toLowerCase();
+      if (S.items.some((i) => i.list === 'todo' && i.who && i.text.trim().toLowerCase() === k && (i.repeat === 'days' || i.repeat === 'day')))
+        return toast(`${c} is still on the chart — take it off the chart first.`, 4000);
+      if (confirm(`Remove “${c}” from the chore list? (For both of you.)`)) saveChoreLib(sharedChores().filter((x) => x.toLowerCase() !== k));
+    }));
+  } else $$('.chorechip[data-chore]', box).forEach((b) => (b.onpointerdown = (e) => startDrag(e, b.dataset.chore, null)));
   $$('.ccell', box).forEach((c) => (c.onpointerdown = (e) => {
     if (sel) return startPaint(e, c);
     const em = e.target.closest('.em');
