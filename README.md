@@ -24,7 +24,7 @@ A shared family calendar that runs free on GitHub Pages.
 
 These need the new database rules. In the [Firebase console](https://console.firebase.google.com/project/family-calendar-513401/firestore/rules) → **Firestore Database → Rules**, replace everything with the contents of `firestore.rules` and tap **Publish**.
 
-**Morning routine** (Lists → ✅ Today → ☀️ Morning) also needs the latest rules published. It's a checklist every kid gets on school mornings (water bottle, breakfast, teeth, snack — add or remove steps there). The Today list and the kitchen display show the morning routine until 11am, then the chores; tap ☀️ Morning / 🧹 Chores to switch.
+**Morning routine** (Lists → ✅ Today → ☀️ Morning) also needs the latest rules published. It's a checklist every kid gets on school mornings (water bottle, breakfast, teeth, snack — add or remove steps there). The Today list and the kitchen display show the morning routine until 11am, then the chores — or switch to chores as soon as every kid has checked off the morning routine. Tap ☀️ Morning / 🧹 Chores to switch by hand.
 
 Notifications are sent by `.github/workflows/notify.yml` every 10 minutes using the secrets that are already there. Its first run makes the push keys (`data/vapid.enc`, `data/vapid-public.txt`). GitHub sometimes runs scheduled jobs late, so a reminder can be a few minutes off. To test the Sunday summary any time: **Actions → Notifications → Run workflow → Send the week-ahead summary now**.
 

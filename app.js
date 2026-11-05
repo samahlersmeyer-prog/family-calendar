@@ -1,11 +1,11 @@
-import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=37';
-import { parseICS, hashId } from './lib/ics.js?v=37';
-import { parseScheduleText } from './lib/schedule-text.js?v=37';
-import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=37';
-import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=37';
-import { initCloud } from './lib/cloud.js?v=37';
-import { CHORE_LIB, choreIcon, choresFor, setChoreDay, DAY_SHORT, DAY_LONG, itemDone, dueOn, repeatLabel as choreRepeat, MORNING_LIB, MORNING_DAYS, autoMode, } from './lib/chores.js?v=37';
-import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=37';
+import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=38';
+import { parseICS, hashId } from './lib/ics.js?v=38';
+import { parseScheduleText } from './lib/schedule-text.js?v=38';
+import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=38';
+import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=38';
+import { initCloud } from './lib/cloud.js?v=38';
+import { CHORE_LIB, choreIcon, choresFor, setChoreDay, DAY_SHORT, DAY_LONG, itemDone, dueOn, repeatLabel as choreRepeat, MORNING_LIB, MORNING_DAYS, autoMode, } from './lib/chores.js?v=38';
+import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=38';
 
 /* ---------- config ---------- */
 const CONFIG = { owner: 'samahlersmeyer-prog', repo: 'family-calendar', branch: 'main' };
@@ -439,10 +439,17 @@ function timeRange(e) {
 const isApple = /iPhone|iPad|Macintosh/.test(navigator.userAgent);
 const mapsUrl = (loc) => isApple ? `https://maps.apple.com/?q=${encodeURIComponent(loc)}` : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(loc)}`;
 
+/** When a timed event is really over. One that "ends" the next day after 5am (but within 24 hours) was a
+ * time-wheel slip saved before the fix, so count it as an hour long. Multi-day events are left alone. */
+function endFor(e) {
+  const end = e.end || e.start;
+  const nextMorning = `${addDays(e.start.slice(0, 10), 1)}T05:00`;
+  return end > nextMorning && end <= addDays(e.start, 1) ? addMinutes(e.start, 60) : end;
+}
 function nextUp() {
   const now = utcToWall(new Date()), today = now.slice(0, 10);
   return allEvents()
-    .filter((e) => e.allDay ? (e.end || addDays(e.start, 1)).slice(0, 10) > today && e.start.slice(0, 10) >= today : (e.end || e.start) > now)
+    .filter((e) => e.allDay ? (e.end || addDays(e.start, 1)).slice(0, 10) > today && e.start.slice(0, 10) >= today : endFor(e) > now)
     .filter((e) => !e.maybe && !/no school|no indoor|break\b/i.test(e.title))
     .sort((a, b) => a.start.localeCompare(b.start))[0];
 }
@@ -991,7 +998,10 @@ function openEdit(e, day) {
     } else {
       start = `${date}T${f.st.value || '00:00'}`;
       end = f.et.value ? `${date}T${f.et.value}` : addMinutes(start, 60);
-      if (end <= start) end = addDays(end, 1);
+      // An end at or before the start is almost always a slip on the time wheel (7:00 PM – 7:00 PM, or AM for PM),
+      // which used to push the end to the next day and keep the event "Next up" all of the next day.
+      // Only treat it as overnight when it ends in the small hours (a 9pm–1am lock-in).
+      if (end <= start) end = +f.et.value.slice(0, 2) < 5 ? addDays(end, 1) : addMinutes(start, 60);
     }
     const out = { ...e, createdAt: e.createdAt || Date.now(), id: e.id || newId(), cal: f.cal.value, title: f.title.value.trim(), allDay, start, end, location: f.location.value.trim(), notes: f.notes.value.trim(), source: e.source || 'manual' };
     if (f.kind.value) out.kind = f.kind.value; else delete out.kind;
@@ -1725,7 +1735,7 @@ const WHO = () => [...kidsList(), 'Mom', 'Dad'];
 const listErr = (err) => toast(/permission/i.test(err.code || err.message) ? 'Lists aren’t switched on yet — Sam needs to update the database rules (see the README).' : err.message, 6000);
 
 function openLists(tab = store.get('listTab') || 'shop') {
-  S.listTab = tab; S.listsOpen = true; S.choreDay = dow(todayWall()); S.todayMode = autoMode(utcToWall(new Date()));
+  S.listTab = tab; S.listsOpen = true; S.choreDay = dow(todayWall()); S.todayMode = autoMode(utcToWall(new Date()), S.items);
   const sh = openModal(`
     <div class="head"><div><h2>Lists</h2><p class="help">Shared with Emily and the kitchen display.</p></div><button class="btn icon ghost" data-close aria-label="Close">✕</button></div>
     <div class="seg listseg"><button data-lt="shop">🛒 Groceries</button><button data-lt="board">🗓️ Chore chart</button><button data-lt="todo">✅ Today</button></div>
@@ -1845,7 +1855,13 @@ function drawLists() {
       if (!isToday) return;
       const nowDone = !itemDone(i);
       const up = i.repeat ? { ...i, doneOn: nowDone ? todayWall() : null, by: myName() || i.by || '' } : { ...i, done: nowDone, doneOn: nowDone ? todayWall() : null };
-      S.items = S.items.map((x) => (x.id === i.id ? up : x)); drawLists();
+      S.items = S.items.map((x) => (x.id === i.id ? up : x));
+      // Last morning step checked off → everyone's ready, so flip to today's chores.
+      if (am && nowDone && autoMode(utcToWall(new Date()), S.items) === 'todo' && S.items.some((x) => x.list === 'todo' && dueOn(x, today))) {
+        setTimeout(() => { if (S.listsOpen) $$('[data-mode="todo"]')[0]?.click(); }, 900);
+        toast('Ready for school! 🎉 On to chores');
+      }
+      drawLists();
       try { await cloud.putItem(S.space, up); } catch (err) { listErr(err); }
     };
     $('.rm', el).onclick = async () => {
