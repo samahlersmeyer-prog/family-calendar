@@ -1,11 +1,11 @@
-import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=39';
-import { parseICS, hashId } from './lib/ics.js?v=39';
-import { parseScheduleText } from './lib/schedule-text.js?v=39';
-import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=39';
-import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=39';
-import { initCloud } from './lib/cloud.js?v=39';
-import { CHORE_LIB, choreIcon, choresFor, setChoreDay, DAY_SHORT, DAY_LONG, itemDone, dueOn, repeatLabel as choreRepeat, MORNING_LIB, MORNING_DAYS, autoMode, } from './lib/chores.js?v=39';
-import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=39';
+import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=40';
+import { parseICS, hashId } from './lib/ics.js?v=40';
+import { parseScheduleText } from './lib/schedule-text.js?v=40';
+import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=40';
+import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=40';
+import { initCloud } from './lib/cloud.js?v=40';
+import { CHORE_LIB, choreIcon, choresFor, setChoreDay, DAY_SHORT, DAY_LONG, itemDone, dueOn, repeatLabel as choreRepeat, MORNING_LIB, MORNING_DAYS, autoMode, } from './lib/chores.js?v=40';
+import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=40';
 
 /* ---------- config ---------- */
 const CONFIG = { owner: 'samahlersmeyer-prog', repo: 'family-calendar', branch: 'main' };
@@ -557,6 +557,7 @@ function welcomeBanner() {
 
 function bindEvents(root) {
   $$('[data-stop]', root).forEach((a) => a.addEventListener('click', (ev) => ev.stopPropagation()));
+  $$('[data-share]', root).forEach((b) => b.addEventListener('click', (ev) => { ev.stopPropagation(); const e = findEvent(b.dataset.share); if (e) shareEvent(e); }));
   $$('[data-ev]', root).forEach((b) => {
     b.onclick = () => openDetail(b.dataset.ev);
     b.onkeydown = (ev) => { if (ev.key === 'Enter') openDetail(b.dataset.ev); };
@@ -595,7 +596,7 @@ function nextCard(e) {
     <div class="nwhen">${esc(dateLine(d))} · ${esc(timeRange(e))}</div>
     ${whoChip(c)}
     ${firstNote && firstNote.length < 140 ? `<div class="nnote">${esc(firstNote)}</div>` : ''}
-    <div class="actions">${e.location ? `<a class="btn primary" href="${mapsUrl(e.location)}" target="_blank" rel="noopener" data-stop>📍 Directions</a>` : ''}<span class="btn">Details</span></div>
+    <div class="actions">${e.location ? `<a class="btn primary" href="${mapsUrl(e.location)}" target="_blank" rel="noopener" data-stop>📍 Directions</a>` : ''}<button class="btn" data-share="${esc(e.id)}">💬 Text</button><span class="btn">Details</span></div>
     ${e.location ? `<div class="nwhere">${esc(e.location)}</div>` : ''}
   </section>`;
 }
