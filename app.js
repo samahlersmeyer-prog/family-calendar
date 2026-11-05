@@ -1,11 +1,11 @@
-import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=38';
-import { parseICS, hashId } from './lib/ics.js?v=38';
-import { parseScheduleText } from './lib/schedule-text.js?v=38';
-import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=38';
-import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=38';
-import { initCloud } from './lib/cloud.js?v=38';
-import { CHORE_LIB, choreIcon, choresFor, setChoreDay, DAY_SHORT, DAY_LONG, itemDone, dueOn, repeatLabel as choreRepeat, MORNING_LIB, MORNING_DAYS, autoMode, } from './lib/chores.js?v=38';
-import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=38';
+import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=39';
+import { parseICS, hashId } from './lib/ics.js?v=39';
+import { parseScheduleText } from './lib/schedule-text.js?v=39';
+import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=39';
+import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=39';
+import { initCloud } from './lib/cloud.js?v=39';
+import { CHORE_LIB, choreIcon, choresFor, setChoreDay, DAY_SHORT, DAY_LONG, itemDone, dueOn, repeatLabel as choreRepeat, MORNING_LIB, MORNING_DAYS, autoMode, } from './lib/chores.js?v=39';
+import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=39';
 
 /* ---------- config ---------- */
 const CONFIG = { owner: 'samahlersmeyer-prog', repo: 'family-calendar', branch: 'main' };
@@ -717,6 +717,31 @@ function eventIcs(e) {
     'END:VEVENT', 'END:VCALENDAR'].filter(Boolean).join('\r\n');
 }
 
+/** One event as a plain text message, for the family group text (works for people who aren't in the app). */
+function eventText(e) {
+  const d = e.start.slice(0, 10);
+  const day = ['Today', 'Tomorrow'].includes(dayLabel(d)) ? `${dayLabel(d)} (${dateLine(d)})` : dateLine(d);
+  const ride = rideFor(e);
+  return [
+    `📅 ${e.title}`,
+    `${day} · ${timeRange(e)}`,
+    e.location ? `📍 ${e.location}` : '',
+    e.location ? mapsUrl(e.location) : '',
+    ride ? `🚗 ${ride.driver} is driving` : '',
+    e.maybe ? '❔ Maybe — depends on results' : '',
+    e.notes ? `\n${e.notes.trim()}` : '',
+  ].filter(Boolean).join('\n');
+}
+async function shareEvent(e) {
+  const text = eventText(e);
+  if (navigator.share) {
+    try { await navigator.share({ text }); return; }
+    catch (err) { if (err.name === 'AbortError') return; }
+  }
+  try { await navigator.clipboard.writeText(text); toast('Copied — paste it into the group text'); }
+  catch { prompt('Copy this and paste it into the group text:', text); }
+}
+
 function openDetail(id) {
   const e = findEvent(id);
   if (!e) return;
@@ -751,10 +776,12 @@ function openDetail(id) {
     <div class="actions stack">
       ${e.location ? `<a class="btn primary" href="${mapsUrl(e.location)}" target="_blank" rel="noopener">📍 Get directions</a>` : ''}
       ${(e.attachments || []).map((a, i) => `<button class="btn" data-att="${i}">📎 ${esc(a.name)}</button>`).join('')}
+      <button class="btn" id="shareText">💬 Text it to the family</button>
       <button class="btn" id="addPhone">📅 Add to my phone calendar</button>
     </div>
     ${canEdit || canDelete ? `<div class="actions">${canEdit ? `<button class="btn" id="edit">Edit</button>` : ''}${canDelete ? `<button class="btn danger" id="del">Delete</button>` : ''}</div>` : ''}`);
   $('[data-close]', sh).onclick = closeModal;
+  $('#shareText').onclick = () => shareEvent(e);
   $('#addPhone').onclick = () => {
     const url = URL.createObjectURL(new Blob([eventIcs(e)], { type: 'text/calendar' }));
     const a = document.createElement('a');
