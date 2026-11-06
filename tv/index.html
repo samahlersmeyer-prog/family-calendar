@@ -27,19 +27,19 @@
 
     #screen { height: 100vh; display: grid; grid-template-rows: auto 1fr auto; padding: 1.4rem 1.8rem 0.8rem; gap: 1.1rem; }
 
-    header { display: flex; align-items: flex-end; gap: 1.6rem; min-width: 0; }
-    .clock { font-size: 4.6rem; font-weight: 800; letter-spacing: -0.04em; line-height: 0.9; font-variant-numeric: tabular-nums; }
+    header { display: flex; align-items: flex-end; gap: 1.2rem; min-width: 0; }
+    .clock { font-size: 4.2rem; font-weight: 800; letter-spacing: -0.04em; line-height: 0.9; font-variant-numeric: tabular-nums; }
     .clock small { font-size: 1.6rem; font-weight: 700; letter-spacing: 0; margin-left: 0.3rem; color: var(--muted); }
-    .date { font-size: 1.9rem; font-weight: 700; line-height: 1.1; padding-bottom: 0.25rem; white-space: nowrap; flex: 0 1 auto; min-width: 0; }
+    .date { font-size: 1.7rem; font-weight: 700; line-height: 1.1; padding-bottom: 0.25rem; white-space: nowrap; flex: 0 0 auto; }
     .date span { overflow: hidden; text-overflow: ellipsis; }
     .date span { display: block; font-size: 1.05rem; font-weight: 600; color: var(--muted); margin-top: 0.25rem; }
-    .wx { margin-left: auto; flex: none; display: flex; align-items: center; gap: 0.7rem; padding: 0 0 0.25rem 1.4rem; border-left: 2px solid var(--line); }
-    .wx ~ .nextup { margin-left: 0; flex: 0 1 auto; min-width: 9rem; padding-left: 1.4rem; border-left: 2px solid var(--line); }
-    .wx .ic { font-size: 3rem; line-height: 1; }
+    .wx { margin-left: auto; flex: none; display: flex; gap: 1.1rem; padding: 0 0 0.25rem 1.2rem; border-left: 2px solid var(--line); }
+    .wx ~ .nextup { margin-left: 0; flex: 0 1 auto; min-width: 7rem; padding-left: 1.2rem; border-left: 2px solid var(--line); }
     .wx .lbl { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 800; }
-    .wx .temps { font-size: 1.9rem; font-weight: 800; line-height: 1.05; font-variant-numeric: tabular-nums; }
-    .wx .temps small { font-size: 1.2rem; color: var(--muted); font-weight: 700; }
-    .wx .when { font-size: 1.05rem; color: var(--muted); font-weight: 600; white-space: nowrap; }
+    .wx .temps { font-size: 1.55rem; font-weight: 800; line-height: 1.1; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .wx .temps .ic { font-size: 1.45rem; margin-right: 0.25rem; }
+    .wx .temps small { font-size: 1.1rem; color: var(--muted); font-weight: 700; }
+    .wx .when { font-size: 1rem; color: var(--muted); font-weight: 600; white-space: nowrap; }
     .nextup { margin-left: auto; text-align: right; max-width: 42%; padding-bottom: 0.25rem; }
     .nextup .lbl { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent); font-weight: 800; }
     .nextup .what { font-size: 1.35rem; font-weight: 800; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -138,6 +138,6 @@
 </head>
 <body>
   <div id="app"><div class="center muted">Loading…</div></div>
-  <script type="module" src="tv.js?v=18"></script>
+  <script type="module" src="tv.js?v=19"></script>
 </body>
 </html>

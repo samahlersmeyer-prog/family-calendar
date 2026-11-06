@@ -186,11 +186,16 @@ async function loadWeather() {
   } catch { /* keep the last forecast; try again later */ }
 }
 function weatherBox(today) {
-  const w = (S.wx || []).find((x) => x.day === addDays(today, 1));
-  if (!w) return '';
-  const [, icon, word] = WX_CODES.find(([cs]) => cs.includes(w.code)) || [0, '🌡️', ''];
-  return `<div class="wx"><div class="ic">${icon}</div><div><div class="lbl">Tomorrow</div>
-    <div class="temps">${w.hi}°<small> / ${w.lo}°</small></div><div class="when">${esc(word)}${w.rain >= 20 ? ` · 💧${w.rain}%` : ''}</div></div></div>`;
+  const day = (d, label) => {
+    const w = (S.wx || []).find((x) => x.day === d);
+    if (!w) return '';
+    const [, icon, word] = WX_CODES.find(([cs]) => cs.includes(w.code)) || [0, '🌡️', ''];
+    return `<div class="wday"><div class="lbl">${label}</div>
+      <div class="temps"><span class="ic">${icon}</span>${w.hi}°<small> / ${w.lo}°</small></div>
+      <div class="when">${esc(word)}${w.rain >= 20 ? ` · 💧${w.rain}%` : ''}</div></div>`;
+  };
+  const html = day(today, 'Today') + day(addDays(today, 1), 'Tomorrow');
+  return html ? `<div class="wx">${html}</div>` : '';
 }
 
 function nextUp(idx, now) {
@@ -239,7 +244,7 @@ function paint() {
   <div id="screen" class="${listsCol() ? 'withlists' : ''}">
     <header>
       <div class="clock">${t.hm}<small>${t.ap}</small></div>
-      <div class="date">${WEEKDAYS[dow(today)]}, ${MONTHS[+today.slice(5, 7) - 1].slice(0, 3)} ${+today.slice(8)}<span>${greeting}${S.cal.title ? ' · ' + esc(S.cal.title) : ''}</span></div>
+      <div class="date">${WEEKDAYS[dow(today)]}, ${MONTHS[+today.slice(5, 7) - 1].slice(0, 3)} ${+today.slice(8)}<span>${greeting}</span></div>
       ${weatherBox(today)}
       ${nextUp(idx, nowWall)}
     </header>
