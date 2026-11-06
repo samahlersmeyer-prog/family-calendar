@@ -180,9 +180,9 @@ const WX_CODES = [[[0], '☀️', 'Sunny'], [[1], '🌤️', 'Mostly sunny'], [[
   [[71, 73, 77, 85], '🌨️', 'Snow'], [[75, 86], '❄️', 'Heavy snow'], [[95, 96, 99], '⛈️', 'Storms']];
 async function loadWeather() {
   try {
-    const q = `latitude=${WX_AT.lat}&longitude=${WX_AT.lon}&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&temperature_unit=fahrenheit&timezone=America%2FIndiana%2FIndianapolis&forecast_days=3`;
+    const q = `latitude=${WX_AT.lat}&longitude=${WX_AT.lon}&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset&temperature_unit=fahrenheit&timezone=America%2FIndiana%2FIndianapolis&forecast_days=3`;
     const d = (await (await fetch('https://api.open-meteo.com/v1/forecast?' + q)).json()).daily;
-    S.wx = d.time.map((day, i) => ({ day, code: d.weather_code[i], hi: Math.round(d.temperature_2m_max[i]), lo: Math.round(d.temperature_2m_min[i]), rain: d.precipitation_probability_max[i] }));
+    S.wx = d.time.map((day, i) => ({ day, code: d.weather_code[i], hi: Math.round(d.temperature_2m_max[i]), lo: Math.round(d.temperature_2m_min[i]), rain: d.precipitation_probability_max[i], rise: (d.sunrise[i] || '').slice(11, 16), set: (d.sunset[i] || '').slice(11, 16) }));
   } catch { /* keep the last forecast; try again later */ }
 }
 function weatherBox(today) {
@@ -336,13 +336,16 @@ function fit() {
   }
 }
 
-// Easier on the eyes at night: dark from 8 PM to 6:30 AM (or force it with ?theme=dark / ?theme=light).
+// Easier on the eyes at night: dark from sunset to sunrise (8 PM–6:30 AM if the forecast hasn't loaded).
+// Force it with ?theme=dark / ?theme=light.
 function isNight(nowWall) {
   const q = new URLSearchParams(location.search).get('theme');
   if (q === 'dark') return true;
   if (q === 'light') return false;
   const hm = nowWall.slice(11, 16);
-  return hm >= '20:00' || hm < '06:30';
+  const w = (S.wx || []).find((x) => x.day === nowWall.slice(0, 10));
+  const rise = w?.rise || '06:30', set = w?.set || '20:00';
+  return hm >= set || hm < rise;
 }
 
 /* ---------- keep the screen awake and fresh ---------- */
