@@ -172,6 +172,27 @@ function evCard(e, now) {
     </span></div>`;
 }
 
+/* ---------- tomorrow's weather (Open-Meteo: free, no key) ---------- */
+// Fort Wayne. Change these if the display moves.
+const WX_AT = { lat: 41.08, lon: -85.14 };
+const WX_CODES = [[[0], '☀️', 'Sunny'], [[1], '🌤️', 'Mostly sunny'], [[2], '⛅', 'Partly cloudy'], [[3], '☁️', 'Cloudy'], [[45, 48], '🌫️', 'Foggy'],
+  [[51, 53, 55, 56, 57], '🌦️', 'Drizzle'], [[61, 63, 80, 81], '🌧️', 'Rain'], [[65, 82], '🌧️', 'Heavy rain'], [[66, 67], '🧊', 'Freezing rain'],
+  [[71, 73, 77, 85], '🌨️', 'Snow'], [[75, 86], '❄️', 'Heavy snow'], [[95, 96, 99], '⛈️', 'Storms']];
+async function loadWeather() {
+  try {
+    const q = `latitude=${WX_AT.lat}&longitude=${WX_AT.lon}&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&temperature_unit=fahrenheit&timezone=America%2FIndiana%2FIndianapolis&forecast_days=3`;
+    const d = (await (await fetch('https://api.open-meteo.com/v1/forecast?' + q)).json()).daily;
+    S.wx = d.time.map((day, i) => ({ day, code: d.weather_code[i], hi: Math.round(d.temperature_2m_max[i]), lo: Math.round(d.temperature_2m_min[i]), rain: d.precipitation_probability_max[i] }));
+  } catch { /* keep the last forecast; try again later */ }
+}
+function weatherBox(today) {
+  const w = (S.wx || []).find((x) => x.day === addDays(today, 1));
+  if (!w) return '';
+  const [, icon, word] = WX_CODES.find(([cs]) => cs.includes(w.code)) || [0, '🌡️', ''];
+  return `<div class="wx"><div class="ic">${icon}</div><div><div class="lbl">Tomorrow</div>
+    <div class="temps">${w.hi}°<small> / ${w.lo}°</small></div><div class="when">${esc(word)}${w.rain >= 20 ? ` · 💧${w.rain}%` : ''}</div></div></div>`;
+}
+
 function nextUp(idx, now) {
   const today = now.slice(0, 10);
   for (let i = 0; i <= UPCOMING_DAYS; i++) {
@@ -218,7 +239,8 @@ function paint() {
   <div id="screen" class="${listsCol() ? 'withlists' : ''}">
     <header>
       <div class="clock">${t.hm}<small>${t.ap}</small></div>
-      <div class="date">${WEEKDAYS[dow(today)]}, ${md(today)}<span>${greeting}${S.cal.title ? ' · ' + esc(S.cal.title) : ''}</span></div>
+      <div class="date">${WEEKDAYS[dow(today)]}, ${MONTHS[+today.slice(5, 7) - 1].slice(0, 3)} ${+today.slice(8)}<span>${greeting}${S.cal.title ? ' · ' + esc(S.cal.title) : ''}</span></div>
+      ${weatherBox(today)}
       ${nextUp(idx, nowWall)}
     </header>
     <div class="cols">
@@ -336,6 +358,8 @@ addEventListener('resize', () => paint());
 
 setInterval(paint, 20 * 1000);                    // clock, "Now", next-up countdown
 setInterval(() => S.space && loadFeeds().then(paint), 15 * 60 * 1000); // team feeds (GameChanger etc.)
+loadWeather().then(paint);
+setInterval(() => loadWeather().then(paint), 30 * 60 * 1000); // tomorrow's forecast
 // Reload once a night so the screen picks up app updates and never goes stale.
 setInterval(() => { const hm = utcToWall(new Date()).slice(11, 16); if (hm === '03:30' && navigator.onLine) location.reload(); }, 60 * 1000);
 
