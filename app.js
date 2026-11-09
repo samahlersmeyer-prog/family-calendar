@@ -1953,7 +1953,7 @@ function drawBoard(box) {
   const kids = chartKids(), today = dow(todayWall()), sel = S.boardChore || '';
   const days = [0, 1, 2, 3, 4, 5, 6];
   box.innerHTML = `
-    <p class="help">${sel ? `<b>${esc(choreIcon(sel))} ${esc(sel)}</b>: tap a box, or swipe across a row to fill several days. Tap or swipe again to take it off. Tap a name for every day.` : 'Tap a chore, then tap or swipe across the days. Or drag a chore into a box, and drag one in a box to move it.'}</p>
+    <p class="help">${sel ? `<b>${esc(choreIcon(sel))} ${esc(sel)}</b>: tap a box, or swipe across a row to fill several days. Tap or swipe again to take it off. Tap a name for every day.` : 'Tap a chore, then tap or swipe across the days. Or drag a chore into a box. Drag one in a box to move it, or drag it off the chart to remove it.'}</p>
     <div class="palette ${S.choreEdit ? 'editing' : ''}">${choreLib().map((c) => `<button class="chorechip ${c === sel ? 'on' : ''}" data-chore="${esc(c)}"><span>${choreIcon(c)}</span>${esc(c)}${S.choreEdit ? '<b class="x">✕</b>' : ''}</button>`).join('')}
       ${S.choreEdit ? '' : '<button class="chorechip add" id="newChore">＋ New chore</button>'}
       <button class="chorechip add" id="editChores">${S.choreEdit ? 'Done editing' : '✎ Edit list'}</button></div>
@@ -1997,7 +1997,11 @@ function drawBoard(box) {
       if (!ghost) return select(chore);
       ghost.remove();
       const c = cellAt(e.clientX, e.clientY - LIFT);
-      if (!c) return;
+      if (!c) {
+        // Dragged a chore out of its box and let go off the chart: take it off that day.
+        if (from) { applyChore([choreOn(from.kid, chore, [from.day], false)]); toast(`${choreIcon(chore)} ${chore} taken off ${from.kid}, ${DAY_LONG[from.day]}`); }
+        return;
+      }
       const kid = c.dataset.kid, wds = c.classList.contains('kidname') ? days : [+c.dataset.day];
       if (from && from.kid === kid && wds.length === 1 && wds[0] === from.day) return;
       // Moving: take it off the old box first, then put it on the new one (built on the updated list).
