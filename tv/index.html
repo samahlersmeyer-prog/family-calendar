@@ -43,6 +43,8 @@
     .nextup { margin-left: auto; text-align: right; max-width: 42%; padding-bottom: 0.25rem; }
     .nextup .lbl { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent); font-weight: 800; }
     .nextup .what { font-size: 1.35rem; font-weight: 800; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .nextup .leave { font-size: 1.05rem; font-weight: 800; color: var(--ink, inherit); white-space: nowrap; }
+    .kb { display: inline-block; width: 1.25em; height: 1.25em; line-height: 1.25em; border-radius: 50%; color: #fff; font-size: 0.72em; font-weight: 800; text-align: center; margin-right: 0.35em; vertical-align: 0.12em; }
     .nextup .when { font-size: 1.05rem; color: var(--muted); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
     .cols { display: grid; grid-template-columns: 1.12fr 1fr; gap: 1.4rem; min-height: 0; }
@@ -84,6 +86,7 @@
     .row { display: flex; gap: 0.6rem; align-items: baseline; padding: 0.32rem 0 0.32rem 0.6rem; border-left: 0.32rem solid var(--c, var(--muted)); margin-bottom: 0.25rem; background: var(--card); border-radius: 0 0.5rem 0.5rem 0; }
     .row .t { width: 4.6rem; flex: none; font-weight: 800; font-size: 1rem; font-variant-numeric: tabular-nums; }
     .row .title { font-weight: 700; font-size: 1.08rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; padding-right: 0.5rem; }
+    .row .rwx { flex: none; color: var(--muted); font-weight: 700; font-size: 0.95rem; padding-right: 0.6rem; white-space: nowrap; }
     .row .title small { color: var(--muted); font-weight: 600; font-size: 0.9rem; }
     .more { color: var(--muted); font-weight: 700; font-size: 0.95rem; padding: 0.2rem 0 0 0.9rem; }
 
@@ -139,6 +142,6 @@
 </head>
 <body>
   <div id="app"><div class="center muted">Loading…</div></div>
-  <script type="module" src="tv.js?v=21"></script>
+  <script type="module" src="tv.js?v=22"></script>
 </body>
 </html>

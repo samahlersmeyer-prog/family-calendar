@@ -6,7 +6,8 @@
 import { initCloud } from '../lib/cloud.js?v=42';
 import { itemDone, dueToday, choreIconImg, autoMode, tickItem } from '../lib/chores.js?v=42';
 import { decryptJSON } from '../lib/crypto.js?v=42';
-import { expandAll, kindOf, KIDS, kidColor } from '../lib/events.js?v=42';
+import { expandAll, kindOf, KIDS, kidColor, calKid, titleKid } from '../lib/events.js?v=42';
+import { weatherFor, isOutdoor, leaveBy } from '../lib/trip.js?v=42';
 import { todayWall, utcToWall, addDays, addMinutes, diffMinutes, dow } from '../lib/tz.js?v=42';
 
 const RAW = 'https://raw.githubusercontent.com/samahlersmeyer-prog/family-calendar/main/';
@@ -154,6 +155,32 @@ async function tick(id) {
 }
 
 /* ---------- the display ---------- */
+/* Whose event: the kid's colored initial. */
+const kidsOf = () => S.cal.kids || KIDS;
+const kidOf = (e) => calKid(calOf(e.cal), kidsOf()) || titleKid(e.title, kidsOf());
+const kb = (e) => { const k = kidOf(e); return k ? `<span class="kb" style="background:${esc(kidColor(k, kidsOf()))}">${esc(k[0])}</span>` : ''; };
+
+/* Weather on outdoor games and "Leave by" on Next up. Looked up in the background, then the screen repaints. */
+const extra = {};
+function lookup(key, fn) {
+  const x = extra[key];
+  if (x && (x.busy || Date.now() - x.at < 30 * 60e3)) return x.val;
+  extra[key] = { busy: true, at: Date.now(), val: x?.val };
+  fn().then((val) => { extra[key] = { at: Date.now(), val }; paint(); }).catch(() => { extra[key] = { at: Date.now(), val: x?.val }; });
+  return x?.val;
+}
+function wxFor(e, short = false) {
+  if (!isOutdoor(e, calOf(e.cal))) return '';
+  const w = lookup('wx:' + e.id + e.start, () => weatherFor(e));
+  return w ? `${w.icon} ${w.temp}°${w.rain >= (short ? 40 : 20) ? ` · ${w.rain}%${short ? '' : ' rain'}` : ''}` : '';
+}
+function leaveFor(e) {
+  if (!S.cal.home || !e.location || e.allDay) return '';
+  const r = lookup('leave:' + e.id + e.start + S.cal.home, () => leaveBy(e, false, S.cal.home));
+  if (!r) return '';
+  return r.late ? `Leave now · ${r.drive} min drive` : `Leave by ${shortTime(r.leave)} · ${r.drive} min drive`;
+}
+
 function evCard(e, now) {
   const c = calOf(e.cal);
   const t = fmtTime(e.start);
@@ -161,12 +188,12 @@ function evCard(e, now) {
   const end = endSameDay ? e.end : addMinutes(e.start, 60);
   const state = end <= now ? 'done' : e.start <= now ? 'now' : '';
   const ride = S.rides[rideKey(e.id)];
-  const meta = [c.name, shortPlace(e.location)].filter(Boolean).join(' · ');
+  const meta = [c.name, shortPlace(e.location), state === 'done' ? '' : wxFor(e)].filter(Boolean).join(' · ');
   return `<div class="ev ${state}">
     <span class="bar" style="background:${esc(c.color)}"></span>
     <span class="t">${t.hm}<small>${t.ap}</small>${endSameDay ? `<small>to ${esc(shortTime(e.end))}</small>` : ''}</span>
     <span class="b">
-      <div class="title">${state === 'now' ? '<span class="tag">Now</span>' : ''}${isMaybe(e) && !/^\s*maybe\b/i.test(e.title) ? '<span class="tag soft">Maybe</span>' : ''}${esc(e.title)}</div>
+      <div class="title">${kb(e)}${state === 'now' ? '<span class="tag">Now</span>' : ''}${isMaybe(e) && !/^\s*maybe\b/i.test(e.title) ? '<span class="tag soft">Maybe</span>' : ''}${esc(e.title)}</div>
       ${meta ? `<div class="meta">${esc(meta)}</div>` : ''}
       ${ride ? `<div class="ride">🚗 ${esc(ride.driver)} driving</div>` : ''}
     </span></div>`;
@@ -210,7 +237,8 @@ function nextUp(idx, now) {
       when = mins < 60 ? `in ${mins} min` : `in ${Math.floor(mins / 60)} hr${mins % 60 >= 5 ? ` ${mins % 60} min` : ''}`;
       when += ` · ${timeText(e.start)}`;
     } else when = `${i === 1 ? 'Tomorrow' : WEEKDAYS[dow(d)]} · ${timeText(e.start)}`;
-    return `<div class="nextup"><div class="lbl">Next up</div><div class="what">${esc(e.title)}</div><div class="when">${esc(when)}</div></div>`;
+    const leave = i <= 1 ? leaveFor(e) : '';
+    return `<div class="nextup"><div class="lbl">Next up</div><div class="what">${esc(e.title)}</div><div class="when">${esc(when)}</div>${leave ? `<div class="leave">🚗 ${esc(leave)}</div>` : ''}</div>`;
   }
   return '';
 }
@@ -234,8 +262,8 @@ function paint() {
     upcoming.push(`<section class="day"><h3>${i === 1 ? 'Tomorrow' : WEEKDAYS[dow(d)]} <span>${md(d)}</span></h3>
       ${evs.length ? evs.map((e) => {
         const c = calOf(e.cal);
-        const place = shortPlace(e.location);
-        return `<div class="row" style="--c:${esc(c.color)}"><span class="t">${e.allDay ? 'All day' : shortTime(e.start)}</span><span class="title">${isMaybe(e) && !/^\s*maybe\b/i.test(e.title) ? 'Maybe: ' : ''}${esc(e.title)}${place ? ` <small>· ${esc(place)}</small>` : ''}</span></div>`;
+        const place = shortPlace(e.location), wx = wxFor(e, true);
+        return `<div class="row" style="--c:${esc(c.color)}"><span class="t">${e.allDay ? 'All day' : shortTime(e.start)}</span><span class="title">${kb(e)}${isMaybe(e) && !/^\s*maybe\b/i.test(e.title) ? 'Maybe: ' : ''}${esc(e.title)}${place ? ` <small>· ${esc(place)}</small>` : ''}</span>${wx ? `<span class="rwx">${esc(wx)}</span>` : ''}</div>`;
       }).join('') : '<div class="row" style="--c:var(--line)"><span class="title muted">Nothing planned</span></div>'}
     </section>`);
   }

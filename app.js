@@ -1,6 +1,6 @@
 import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=42';
 import { parseICS, hashId } from './lib/ics.js?v=42';
-import { parseScheduleText } from './lib/schedule-text.js?v=42';
+import { parseScheduleText, parseBracket, needsWeekend } from './lib/schedule-text.js?v=42';
 import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=42';
 import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=42';
 import { initCloud } from './lib/cloud.js?v=42';
@@ -227,7 +227,7 @@ async function start() {
   const spaceReady = new Promise((res) => {
     unsubs.push(cloud.watchSpace(S.space, (d, fromCache) => {
       if (!d) { if (fromCache) return; res(false); return; }
-      Object.assign(S.cal, { title: d.title, calendars: d.calendars || [], editors: d.editors || [], familyCode: d.familyCode, codeSet: d.codeSet, choreLib: d.choreLib });
+      Object.assign(S.cal, { title: d.title, calendars: d.calendars || [], editors: d.editors || [], familyCode: d.familyCode, codeSet: d.codeSet, choreLib: d.choreLib, home: d.home });
       res(true); if (!first) paint();
       if (S.listsOpen && S.listTab === 'board') drawLists();
     }, () => res(false)));
@@ -580,7 +580,7 @@ function addSwipe(el) {
 
 /** "Team schedules synced 25 min ago" — so everyone can trust the games are current. */
 function syncLine() {
-  const ats = Object.values(S.feeds.status || {}).filter((x) => x?.ok && x.at).map((x) => x.at);
+  const ats = Object.values(S.feeds.status || {}).filter((x) => x?.ok && x.at).map((x) => (typeof x.at === 'number' ? x.at : Date.parse(x.at))).filter((t) => t > 0);
   if (!ats.length) return '';
   const mins = Math.max(0, Math.round((Date.now() - Math.max(...ats)) / 60000));
   const ago = mins < 2 ? 'just now' : mins < 60 ? `${mins} min ago` : mins < 48 * 60 ? `${Math.round(mins / 60)} hr ago` : `${Math.round(mins / 1440)} days ago`;
@@ -1274,6 +1274,7 @@ async function smartFill(file, f, pending, showNew) {
       status('Reading the PDF…');
       text = await pdfText(file);
       if (text.replace(/\s/g, '').length < 20) { status('It’s a scanned PDF — reading the picture…'); text = await ocr(await pdfPageImage(file), status); }
+      if (needsWeekend(text)) { const n = (text.match(/\b(mon|tue|wed|thu|fri|sat|sun)[a-z]*\.?\s+\d{1,2}(:\d{2})?\s*[ap]\.?\s*m/gi) || []).length; return offerSchedule(f, n, () => openImport([file])); }
     } else if (/^image\//.test(file.type)) {
       status('Reading the picture…');
       text = await ocr(file, status);
@@ -1346,7 +1347,7 @@ function loadPdfJs() {
   }));
 }
 
-async function pdfText(file) {
+async function pdfText(file, layout = false) {
   const pdfjs = await loadPdfJs();
   const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
   const out = [];
@@ -1361,7 +1362,10 @@ async function pdfText(file) {
       row.items.push({ x, s: it.str });
     }
     rows.sort((a, b) => b.y - a.y);
-    for (const r of rows) out.push(r.items.sort((a, b) => a.x - b.x).map((i) => i.s).join('  '));
+    // layout: keep each word roughly in its column (brackets need to know what's above and below a time)
+    for (const r of rows) out.push(layout
+      ? r.items.sort((a, b) => a.x - b.x).reduce((line, i) => { const col = Math.round(i.x / 4.5); return (line.length < col ? line.padEnd(col) : line + '  ') + i.s; }, '')
+      : r.items.sort((a, b) => a.x - b.x).map((i) => i.s).join('  '));
   }
   return out.join('\n');
 }
@@ -1426,7 +1430,7 @@ function openImport(files, tab = 'file') {
 async function handleFiles(files) {
   const review = $('#review');
   review.innerHTML = `<p class="muted">Reading ${files.length > 1 ? files.length + ' files' : esc(files[0].name)}…</p>`;
-  const icsEvents = [], textRows = [], notes = [];
+  const icsEvents = [], textRows = [], notes = [], undated = [];
   for (const f of files) {
     const name = f.name.toLowerCase();
     try {
@@ -1434,8 +1438,10 @@ async function handleFiles(files) {
         icsEvents.push(...parseICS(await f.text(), { calId: 'tmp', source: 'ics', pastDays: 1 }));
       } else if (name.endsWith('.pdf') || f.type === 'application/pdf' || /^image\//.test(f.type)) {
         const say = (t) => { review.innerHTML = `<p class="muted">${esc(t)}</p>`; };
-        let text = /^image\//.test(f.type) ? '' : await pdfText(f);
+        let text = /^image\//.test(f.type) ? '' : await pdfText(f, true);
         if (text.replace(/\s/g, '').length < 20) text = await ocr(/^image\//.test(f.type) ? f : await pdfPageImage(f), say);
+        if (needsWeekend(text)) { undated.push({ name: f.name, text }); continue; }
+        if (!/^image\//.test(f.type)) text = await pdfText(f);
         const rows = mergeRows(parseScheduleText(gridToLines(text), { base: todayWall() }));
         if (!rows.length) notes.push(`I couldn’t find dates in ${f.name}. Handwriting and busy wall calendars are hard to read automatically — send the photo to Claude in chat and it’ll add them.`);
         textRows.push(...rows);
@@ -1444,7 +1450,24 @@ async function handleFiles(files) {
       }
     } catch (e) { notes.push(`${f.name}: ${e.message}`); }
   }
-  renderReview({ icsEvents, textRows, notes, label: files.map((f) => f.name).join(', '), cal: guessCal(files.map((f) => f.name).join(' ')) });
+  const label = files.map((f) => f.name).join(', '), cal = guessCal(files.map((f) => f.name).join(' '));
+  if (undated.length) return askWeekend(undated, { icsEvents, textRows, notes, label, cal });
+  renderReview({ icsEvents, textRows, notes, label, cal });
+}
+
+/* A bracket or weekend schedule that only says "Sat. 2:40 p.m.": ask which weekend, then read every game. */
+function askWeekend(undated, rest) {
+  const review = $('#review');
+  const today = todayWall(), sat = addDays(today, (6 - dow(today) + 7) % 7);
+  review.innerHTML = `<div class="steps-card"><b>Which weekend is this?</b><br><span class="help">${esc(undated.map((u) => u.name).join(', '))} has days and times (like “Sat. 2:40 p.m.”) but no dates.</span>
+    <label class="f">The Saturday of that weekend</label><div class="two"><input class="in" type="date" id="wkSat" value="${sat}"><button type="button" class="btn primary" id="wkGo">Find the games</button></div></div>`;
+  $('#wkGo').onclick = () => {
+    let d = $('#wkSat').value;
+    if (!d) return;
+    d = addDays(d, (6 - dow(d) + 7) % 7); // any day that weekend → its Saturday
+    const rows = undated.flatMap((u) => parseBracket(u.text, d).map((r) => ({ ...r, notes: `From ${u.name}` })));
+    renderReview({ ...rest, textRows: [...rest.textRows, ...rows], notes: [...rest.notes, ...(rows.length ? ['First-round games are checked. Later games don’t list teams yet — check the ones your team could play and rename them.'] : ['Couldn’t find game times in it.'])] });
+  };
 }
 
 function renderReview({ icsEvents = [], textRows = [], notes = [], label, cal }) {
@@ -1459,13 +1482,13 @@ function renderReview({ icsEvents = [], textRows = [], notes = [], label, cal })
     <div id="rows">
       ${icsEvents.map((e, i) => { const dup = findDuplicate(e); return `<label class="rrow ics"><input type="checkbox" data-i="${i}" data-k="ics" ${dup ? '' : 'checked'}>
         <span><b>${esc(e.title)}</b><br><span class="muted">${fmtDay(e.start.slice(0, 10))}${e.allDay ? '' : ' · ' + fmtTime(e.start)}${e.location ? ' · ' + esc(e.location) : ''}</span>${dup ? `<br><span class="dup">Already on the calendar: ${esc(dup.title)}</span>` : ''}</span></label>`; }).join('')}
-      ${textRows.map((r, i) => { const dup = findDuplicate({ title: r.title, start: r.time ? `${r.date}T${r.time}` : r.date, allDay: !r.time }); return `<div class="rrow"><input type="checkbox" data-i="${i}" data-k="txt" ${r.title && !dup ? 'checked' : ''}>${dup ? `<div class="dup full">Already on the calendar: ${esc(dup.title)}</div>` : ''}
+      ${textRows.map((r, i) => { const dup = findDuplicate({ title: r.title, start: r.time ? `${r.date}T${r.time}` : r.date, allDay: !r.time }); return `<div class="rrow"><input type="checkbox" data-i="${i}" data-k="txt" ${r.title && !dup && !r.later ? 'checked' : ''}>${dup ? `<div class="dup full">Already on the calendar: ${esc(dup.title)}</div>` : ''}
         <div class="fields">
           <input class="in full" data-f="title" value="${esc(r.title)}" placeholder="Title">
           <input class="in" type="date" data-f="date" value="${r.date}">
           <input class="in" type="time" data-f="time" value="${r.time || ''}">
           <input class="in full" data-f="location" value="${esc(r.location || '')}" placeholder="Where (optional)">
-        </div><div class="src">From: “${esc(r.line.slice(0, 120))}”</div></div>`; }).join('')}
+        </div><div class="src">From: “${esc(String(r.line || '').slice(0, 120))}”</div></div>`; }).join('')}
     </div>
     <div class="actions"><button class="btn primary" id="addAll">Add events</button></div>` : notes.length ? '' : '<p class="muted">No events found.</p>'}`;
   if (!total) return;
@@ -2294,6 +2317,8 @@ function openSettings() {
     <p class="help">To show private events on it too, tap the 🔒 line at the bottom of its screen, then type the code it shows here:</p>
     <div class="two"><input class="in" id="pairCode" inputmode="numeric" maxlength="7" placeholder="6-digit code"><button class="btn primary" id="pairBtn">Show everything</button></div>
     <div id="displays"></div>
+    <label class="f">Home address <span class="muted">(for “Leave by” times on the display)</span></label>
+    <div class="two"><input class="in" id="homeAddr" value="${esc(S.cal.home || '')}" placeholder="Street, Fort Wayne, IN" autocomplete="street-address"><button class="btn" id="saveHome">Save</button></div>
 
     <h4>Weekly email</h4>
     <div id="digestBox"><p class="help">Loading…</p></div>
@@ -2334,6 +2359,11 @@ function openSettings() {
   };
   if (!ed) return;
 
+  $('#saveHome').onclick = async () => {
+    const home = $('#homeAddr').value.trim().slice(0, 200);
+    try { await cloud.updateSpace(S.space, { home }); S.cal.home = home; toast(home ? 'Saved — the display will show when to leave' : 'Removed'); }
+    catch (e) { toast(e.message, 5000); }
+  };
   $('#pairBtn').onclick = async () => {
     const code = $('#pairCode').value.replace(/\D/g, '');
     if (code.length !== 6) return toast('Type the 6 digits shown on the display');
