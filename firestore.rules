@@ -69,8 +69,9 @@ service cloud.firestore {
       match /items/{itemId} {
         allow get, list: if true;
         allow delete: if true;
-        allow create, update: if request.resource.data.keys().hasOnly(['id', 'list', 'text', 'who', 'done', 'doneOn', 'repeat', 'days', 'by', 'at'])
+        allow create, update: if request.resource.data.keys().hasOnly(['id', 'list', 'text', 'who', 'done', 'doneOn', 'repeat', 'days', 'by', 'at', 'log'])
           && request.resource.data.list in ['shop', 'todo', 'am']
+          && (!('log' in request.resource.data) || (request.resource.data.log is list && request.resource.data.log.size() <= 31))
           && (!('days' in request.resource.data) || (request.resource.data.days is list && request.resource.data.days.size() <= 7))
           && request.resource.data.text is string
           && request.resource.data.text.size() > 0
