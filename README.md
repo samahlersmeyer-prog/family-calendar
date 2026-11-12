@@ -2,7 +2,10 @@
 
 A shared family calendar that runs free on GitHub Pages.
 
-- **List and month views**, color-coded by calendar, built for phones (add it to your Home Screen).
+- **Upcoming, week and month views**, color-coded by calendar, built for phones (add it to your Home Screen). Each kid has a color (the dot on their button, the initial on their events, their row on the chore chart). Swipe left/right to change weeks or months. Events that are over fade out.
+- **+ Add** does everything: type it like a text (“Theo practice Thu 6pm at Mad Apple”), or fill it in from a file/photo, a paste, or your email. Whole-season schedules import from the link at the bottom of it.
+- **Leave by**: the Next up card can show when to leave and the drive time (tap “When should we leave?” once to allow location). **Weather** shows on outdoor games and outings for the next 9 days. Both use free services with no keys (OpenStreetMap, OSRM, Open-Meteo).
+- Deleting shows **Undo** for a few seconds instead of an “Are you sure?” box.
 - **Drag and drop** `.ics` calendar files and schedule **PDFs** anywhere on the page, or paste a schedule from an email. Everything is shown for review before it's added.
 - **Team feeds**: paste a GameChanger, SportsYou, TeamSnap or Google Calendar sync link into a calendar in Settings. A GitHub Action pulls them every 2 hours.
 - **Email**: ask Claude to "scan my email for schedules" and it adds what it finds (via `scripts/add-events.mjs`).
@@ -51,7 +54,7 @@ The copy is one-way: change events in this app, not in Google. To leave out the 
 | Path | What it is |
 | --- | --- |
 | `index.html`, `app.js`, `style.css` | The app |
-| `lib/` | Shared code: encryption, .ics reader, schedule text reader, time zones |
+| `lib/` | Shared code: encryption, .ics reader, schedule text reader, time zones, icons (`icons.js`), leave-by + weather (`trip.js`) |
 | `data/calendar.enc` | Your events and calendars (encrypted) |
 | `data/feeds.enc` | Team feed events, written by the Action (encrypted) |
 | `scripts/sync-feeds.mjs` | Team feed sync (run by `.github/workflows/sync-feeds.yml`) |

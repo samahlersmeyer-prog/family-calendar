@@ -3,11 +3,11 @@
 // Shows practices plus everything relatives see (add ?practices=0 for a relative's screen);
 // To include the Family calendar and 🔒 events (matching Alexa), tap the 🔒 line: the screen shows a code
 // that Sam or Emily type in Settings on their phone. No Google sign-in needed on the Echo.
-import { initCloud } from '../lib/cloud.js?v=40';
-import { itemDone, dueToday, choreIconImg, autoMode } from '../lib/chores.js?v=40';
-import { decryptJSON } from '../lib/crypto.js?v=40';
-import { expandAll, kindOf, KIDS } from '../lib/events.js?v=40';
-import { todayWall, utcToWall, addDays, addMinutes, diffMinutes, dow } from '../lib/tz.js?v=40';
+import { initCloud } from '../lib/cloud.js?v=42';
+import { itemDone, dueToday, choreIconImg, autoMode, tickItem } from '../lib/chores.js?v=42';
+import { decryptJSON } from '../lib/crypto.js?v=42';
+import { expandAll, kindOf, KIDS, kidColor } from '../lib/events.js?v=42';
+import { todayWall, utcToWall, addDays, addMinutes, diffMinutes, dow } from '../lib/tz.js?v=42';
 
 const RAW = 'https://raw.githubusercontent.com/samahlersmeyer-prog/family-calendar/main/';
 const FRIENDS = { id: 'friends', name: 'Family & Friends', color: '#0891b2' };
@@ -137,7 +137,7 @@ function listsCol() {
   // One row per kid: name, then a button per chore with its emoji and name.
   const kidCard = (w) => { const mine = allChores.filter((i) => (i.who || '') === w).sort((a, b) => (a.at || 0) - (b.at || 0));
     const left = mine.filter((i) => !itemDone(i)).length;
-    return `<div class="kidchores ${left ? '' : 'alldone'}"><div class="kn">${esc(w || 'Anyone')}${left ? '' : `<small>${mode === 'am' ? 'ready ✓' : 'done ✓'}</small>`}</div><div class="chips">${mine.map(chip).join('')}</div></div>`; };
+    return `<div class="kidchores ${left ? '' : 'alldone'}"><div class="kn">${w && kidOrder.includes(w) && (S.cal.kids || KIDS).includes(w) ? `<i class="kdot" style="background:${esc(kidColor(w, S.cal.kids || KIDS))}"></i>` : ''}${esc(w || 'Anyone')}${left ? '' : `<small>${mode === 'am' ? 'ready ✓' : 'done ✓'}</small>`}</div><div class="chips">${mine.map(chip).join('')}</div></div>`; };
   return `<div class="col lists">
     ${hasAM && hasChores ? `<div class="modes"><button data-mode="am" class="${mode === 'am' ? 'on' : ''}">${emo('2600')}Morning</button><button data-mode="todo" class="${mode === 'todo' ? 'on' : ''}">${emo('1f9f9')}Chores</button></div>` : ''}
     ${allChores.length ? `<h2>${mode === 'am' ? 'Morning routine' : 'Today’s chores'}</h2><div class="list">${whos.map(kidCard).join('')}</div>` : ''}
@@ -148,7 +148,7 @@ async function tick(id) {
   const i = S.items.find((x) => x.id === id);
   if (!i) return;
   const done = !itemDone(i);
-  const up = i.repeat ? { ...i, doneOn: done ? todayWall() : null } : { ...i, done, doneOn: done ? todayWall() : null };
+  const up = tickItem(i, done);
   S.items = S.items.map((x) => (x.id === id ? up : x)); paint();
   try { await cloud.putItem(S.space, up); } catch {}
 }

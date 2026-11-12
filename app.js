@@ -1,11 +1,13 @@
-import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=40';
-import { parseICS, hashId } from './lib/ics.js?v=40';
-import { parseScheduleText } from './lib/schedule-text.js?v=40';
-import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=40';
-import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=40';
-import { initCloud } from './lib/cloud.js?v=40';
-import { CHORE_LIB, choreIcon, choresFor, setChoreDay, DAY_SHORT, DAY_LONG, itemDone, dueOn, repeatLabel as choreRepeat, MORNING_LIB, MORNING_DAYS, autoMode, } from './lib/chores.js?v=40';
-import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf } from './lib/events.js?v=40';
+import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=42';
+import { parseICS, hashId } from './lib/ics.js?v=42';
+import { parseScheduleText } from './lib/schedule-text.js?v=42';
+import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=42';
+import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=42';
+import { initCloud } from './lib/cloud.js?v=42';
+import { CHORE_LIB, choreIcon, choresFor, setChoreDay, DAY_SHORT, DAY_LONG, itemDone, dueOn, repeatLabel as choreRepeat, MORNING_LIB, MORNING_DAYS, autoMode, doneOnDate, tickItem } from './lib/chores.js?v=42';
+import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf, kidColor as kidColorOf } from './lib/events.js?v=42';
+import { ICON } from './lib/icons.js?v=42';
+import { leaveBy, weatherFor, isOutdoor } from './lib/trip.js?v=42';
 
 /* ---------- config ---------- */
 const CONFIG = { owner: 'samahlersmeyer-prog', repo: 'family-calendar', branch: 'main' };
@@ -30,9 +32,16 @@ const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g
 const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
 let toastTimer;
-function toast(msg, ms = 2600) {
+function toast(msg, ms = 2600, action) {
   const t = $('#toast');
   t.textContent = msg;
+  if (action) {
+    const b = document.createElement('button');
+    b.className = 'toastbtn'; b.textContent = action.label;
+    b.onclick = () => { t.classList.add('hidden'); action.fn(); };
+    t.append(b);
+    ms = Math.max(ms, 6000);
+  }
   t.classList.remove('hidden');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.add('hidden'), ms);
@@ -315,6 +324,9 @@ const calKid = (c) => calKidOf(c, kidsList());
 const titleKid = (t) => titleKidOf(t, kidsList());
 const eventKid = (e) => calKid(calById(e.cal)) || titleKid(e.title);
 const forKid = (e, k) => forKidOf(e, k, calById(e.cal), kidsList());
+const kidColor = (k) => kidColorOf(k, kidsList());
+/** A little colored initial so you can tell whose event it is at a glance. */
+const kidBadge = (k) => (k ? `<span class="kb" style="--k:${esc(kidColor(k))}" title="${esc(k)}">${esc(k[0])}</span>` : '');
 
 /* practices: Sam & Emily see them; relatives don't unless they switch them on (per device) */
 const showPractices = () => { const v = store.get('practices'); return v === null ? isEditor() : v === '1'; };
@@ -469,15 +481,17 @@ function shortPlace(loc) {
   return seg || loc;
 }
 
+const isPast = (e) => (e.allDay ? (e.end || addDays(e.start, 1)).slice(0, 10) <= todayWall() : endFor(e) <= utcToWall(new Date()));
 function evRow(e, ov = {}) {
   const c = calById(e.cal);
   const ride = rideFor(e);
   const t = e.allDay ? 'All day' : fmtTime(e.start);
   const end = !e.allDay && e.end && e.end.slice(0, 10) === e.start.slice(0, 10) ? fmtTime(e.end) : '';
-  return `<div class="ev ${e.maybe ? 'maybe' : ''}" role="button" tabindex="0" data-ev="${esc(e.id)}"><span class="bar" style="${swatch(c.color)}"></span>
-    <span class="t">${t}${end ? `<small>to ${end}</small>` : ''}</span>
-    <span class="b"><b>${e.pending ? '<span class="tag">Waiting for OK</span> ' : ''}${e.maybe ? '<span class="tag">Maybe</span> ' : ''}${e.private && !S.relative ? '<span class="lock" title="Only you two">🔒</span> ' : ''}${esc(e.title)}${e.repeat ? ' <span class="rep" title="Repeats">🔁</span>' : ''}</b>
-      ${whoChip(c)}
+  const past = isPast(e);
+  return `<div class="ev ${e.maybe ? 'maybe' : ''} ${past ? 'past' : ''}" role="button" tabindex="0" data-ev="${esc(e.id)}"><span class="bar" style="${swatch(c.color)}"></span>
+    <span class="t">${t}${end ? `<small>to ${end}</small>` : ''}${past ? '<small class="over">Over</small>' : ''}</span>
+    <span class="b"><b>${!S.kid ? kidBadge(eventKid(e)) : ''}${e.pending ? '<span class="tag">Waiting for OK</span> ' : ''}${e.maybe ? '<span class="tag">Maybe</span> ' : ''}${e.private && !S.relative ? '<span class="lock" title="Only you two">🔒</span> ' : ''}${esc(e.title)}${e.repeat ? ' <span class="rep" title="Repeats">🔁</span>' : ''}</b>
+      ${whoChip(c)}${!past && isOutdoor(e, c) ? `<span class="wx" data-wx="${esc(e.id)}"></span>` : ''}
       ${e.location ? `<a class="where" href="${mapsUrl(e.location)}" target="_blank" rel="noopener" data-stop title="${esc(e.location)}">📍 ${esc(shortPlace(e.location))}</a>` : ''}
       ${ride ? `<small class="ride">🚗 ${esc(ride.driver)} driving</small>` : ''}
       ${ov.__dups?.[e.id] ? `<small class="warn">♊ Looks like a duplicate of “${esc(ov.__dups[e.id].title)}”</small>` : ov[e.id] ? `<small class="warn">⚠️ Same time as ${esc(ov[e.id])}</small>` : ''}
@@ -488,12 +502,15 @@ function evRow(e, ov = {}) {
 function renderMain() {
   const family = isEditor();
   const canAdd = isEditor() || canFamilyAdd();
+  const nHidden = visibleCalendars().filter((c) => S.hidden.has(c.id)).length;
+  const showFilter = store.get('showCals') === '1';
   const day = () => (S.view === 'month' ? S.day : S.view === 'week' && S.week && S.week > todayWall() ? S.week : todayWall());
   app.innerHTML = `
   <header class="top">
     <div class="row1">
       <div class="brand">${esc(S.cal.title || 'Family Calendar')}</div>
-      <button class="btn icon ghost" id="searchBtn" aria-label="Search">🔍</button>
+      <button class="btn icon ghost ${showFilter ? 'on' : ''}" id="filterBtn" aria-label="Show or hide calendars" aria-expanded="${showFilter}">${ICON.filter}${nHidden ? `<span class="badge">${nHidden}</span>` : ''}</button>
+      <button class="btn icon ghost" id="searchBtn" aria-label="Search">${ICON.search}</button>
     </div>
     ${S.q !== undefined ? `<div class="searchbar"><input class="in" id="q" type="search" placeholder="Search events, places, notes…" value="${esc(S.q)}" autocomplete="off"><button class="btn" id="qx">Done</button></div>` : ''}
     <div class="row2">
@@ -502,18 +519,21 @@ function renderMain() {
     </div>
   </header>
   ${welcomeBanner()}
-  ${(() => { const n = isEditor() ? S.cal.events.filter((e) => e.pending).length : 0; return n ? `<button class="welcome approve" id="approvals"><div><b>📬 ${n} event${n === 1 ? '' : 's'} from family to OK</b><br><span class="help">Tap to approve or decline</span></div></button>` : ''; })()}
-  <nav class="kids" aria-label="Whose schedule">${['', ...kidsList()].map((k) => `<button class="kid ${S.kid === k ? 'on' : ''}" data-kid="${esc(k)}">${k ? esc(k) : 'Everyone'}</button>`).join('')}</nav>
-  <nav class="chips" aria-label="Show or hide calendars">${visibleCalendars().map((c) => `<button class="chip ${S.hidden.has(c.id) ? 'off' : ''}" data-cal="${esc(c.id)}"><i style="${swatch(c.color)}"></i>${esc(c.name)}</button>`).join('')}</nav>
+  ${(() => { const n = isEditor() ? S.cal.events.filter((e) => e.pending).length : 0; return n ? `<button class="approve" id="approvals"><span>📬 <b>${n} event${n === 1 ? '' : 's'} from family</b> to OK</span><span class="go">Review ›</span></button>` : ''; })()}
+  <nav class="kids" aria-label="Whose schedule">${['', ...kidsList()].map((k) => `<button class="kid ${S.kid === k ? 'on' : ''}" data-kid="${esc(k)}" ${k ? `style="--k:${esc(kidColor(k))}"` : ''}>${k ? `<i></i>${esc(k)}` : 'Everyone'}</button>`).join('')}</nav>
+  ${showFilter ? `<nav class="chips" aria-label="Show or hide calendars">${visibleCalendars().map((c) => `<button class="chip ${S.hidden.has(c.id) ? 'off' : ''}" data-cal="${esc(c.id)}" aria-pressed="${!S.hidden.has(c.id)}"><i style="${swatch(c.color)}"></i>${esc(c.name)}</button>`).join('')}${nHidden ? '<button class="chip ghost" id="showAll">Show all</button>' : ''}</nav>`
+    : nHidden ? `<button class="hiddennote" id="showAll">${nHidden} calendar${nHidden === 1 ? '' : 's'} hidden · <u>Show all</u></button>` : ''}
   <main id="view"></main>
   <nav class="tabbar" aria-label="Menu">
-    <button data-tab="cal"><span>📅</span>Calendar</button>
-    <button data-tab="add" class="addtab"><span>＋</span>Add</button>
-    ${family ? `<button data-tab="lists"><span>🛒</span>Lists</button><button data-tab="email"><span>✉️</span>Email</button><button data-tab="import"><span>📄</span>Import</button>` : ''}
-    <button data-tab="settings"><span>⚙️</span>Settings</button>
+    <button data-tab="cal" class="on">${ICON.calendar}<span>Calendar</span></button>
+    ${family ? `<button data-tab="lists">${ICON.lists}<span>Lists</span></button>` : ''}
+    <button data-tab="add" class="addtab"><b>${ICON.plus}</b><span>Add</span></button>
+    <button data-tab="settings">${ICON.settings}<span>Settings</span></button>
   </nav>`;
   $$('[data-view]').forEach((b) => (b.onclick = () => { S.view = b.dataset.view; store.set('view', S.view); renderMain(); }));
   if ($('#approvals')) $('#approvals').onclick = openApprovals;
+  $('#filterBtn').onclick = () => { store.set('showCals', showFilter ? null : '1'); renderMain(); };
+  if ($('#showAll')) $('#showAll').onclick = () => { S.hidden.clear(); store.set('hidden', '[]'); renderMain(); };
   $('#searchBtn').onclick = () => { S.q = S.q === undefined ? '' : undefined; renderMain(); if (S.q !== undefined) $('#q').focus(); };
   if ($('#q')) {
     $('#q').oninput = () => { S.q = $('#q').value; renderSearch(); };
@@ -537,21 +557,39 @@ function renderMain() {
     cal: () => { if (S.view !== 'list') { S.view = 'list'; store.set('view', 'list'); renderMain(); } scrollTo({ top: 0, behavior: 'smooth' }); },
     add: () => (isEditor() ? openEdit(null, day()) : openFamilyAdd(day())),
     lists: needEditor(() => openLists()),
-    email: needEditor(() => openImport(null, 'email')),
-    import: needEditor(() => openImport()),
     settings: openSettings,
   };
   $$('[data-tab]', $('.tabbar')).forEach((b) => (b.onclick = () => actions[b.dataset.tab]()));
   if (S.q) return renderSearch();
   S.view === 'month' ? renderMonth() : S.view === 'week' ? renderWeek() : renderList();
+  addSwipe($('#view'));
+}
+
+/* Swipe left/right on the week or month to go forward/back (phones). */
+function addSwipe(el) {
+  let x0 = null, y0 = 0;
+  el.addEventListener('touchstart', (e) => { if (e.touches.length !== 1 || S.view === 'list' || S.q) { x0 = null; return; } x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; }, { passive: true });
+  el.addEventListener('touchend', (e) => {
+    if (x0 === null) return;
+    const dx = e.changedTouches[0].clientX - x0, dy = e.changedTouches[0].clientY - y0;
+    x0 = null;
+    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    $(dx < 0 ? '#next' : '#prev')?.click();
+  }, { passive: true });
+}
+
+/** "Team schedules synced 25 min ago" — so everyone can trust the games are current. */
+function syncLine() {
+  const ats = Object.values(S.feeds.status || {}).filter((x) => x?.ok && x.at).map((x) => x.at);
+  if (!ats.length) return '';
+  const mins = Math.max(0, Math.round((Date.now() - Math.max(...ats)) / 60000));
+  const ago = mins < 2 ? 'just now' : mins < 60 ? `${mins} min ago` : mins < 48 * 60 ? `${Math.round(mins / 60)} hr ago` : `${Math.round(mins / 1440)} days ago`;
+  return `<p class="syncline">${ICON.refresh}Team schedules synced ${ago}</p>`;
 }
 
 function welcomeBanner() {
-  if (S.relative && !store.get('welcomedRel')) return `<div class="welcome"><div><b>Welcome! 👋</b> These are the Ahlersmeyer kids’ games, concerts, church and school events. Want practices too? Tap <b>Practices</b> above.
-    Tap any event for the time, place and directions.${canFamilyAdd() ? ' Tap <b>+ Add</b> to put your own family event on the calendar.' : ''}
-    ${isApple ? ' Tip: tap <b>Share → Add to Home Screen</b> to keep it one tap away.' : ''}</div><button class="btn icon ghost" id="welcomeX" aria-label="Got it">✕</button></div>`;
-  if (!S.relative && isEditor() && !store.get('welcomedEd')) return `<div class="welcome"><div><b>You’re an editor.</b> Tap <b>+ Add</b> for a new event, <b>✉︎ Email</b> to pull events from your Gmail, or <b>Import</b> to drop in a schedule PDF.
-    Relatives see everything except the <b>Family</b> calendar and anything marked 🔒, and practices are hidden for them unless they tap <b>Practices</b>.</div><button class="btn icon ghost" id="welcomeX" aria-label="Got it">✕</button></div>`;
+  if (S.relative && !store.get('welcomedRel')) return `<div class="welcome"><div><b>Welcome! 👋</b> Tap any event for directions. Want practices too? Tap <b>Practices</b>.${canFamilyAdd() ? ' <b>+ Add</b> puts your own event on the calendar.' : ''}</div><button class="btn icon ghost" id="welcomeX" aria-label="Got it">✕</button></div>`;
+  if (!S.relative && isEditor() && !store.get('welcomedEd')) return `<div class="welcome"><div><b>You’re an editor.</b> <b>+ Add</b> types, pastes, imports or scans your email. Relatives don’t see 🔒 events or practices.</div><button class="btn icon ghost" id="welcomeX" aria-label="Got it">✕</button></div>`;
   return '';
 }
 
@@ -562,6 +600,32 @@ function bindEvents(root) {
     b.onclick = () => openDetail(b.dataset.ev);
     b.onkeydown = (ev) => { if (ev.key === 'Enter') openDetail(b.dataset.ev); };
   });
+  fillExtras(root);
+}
+
+/* Weather on outdoor events and the "leave by" line fill in a moment after the page draws. */
+const wxText = (w) => `${w.icon} ${w.temp}°${w.rain >= 20 ? ` · ${w.rain}% rain` : ''}`;
+function fillExtras(root) {
+  $$('[data-wx]', root).slice(0, 15).forEach((el) => {
+    const e = findEvent(el.dataset.wx);
+    if (e) weatherFor(e).then((w) => { if (w && el.isConnected) { el.textContent = wxText(w); el.classList.add('on'); } }).catch(() => {});
+  });
+  $$('[data-leave]', root).forEach((el) => drawLeave(el, false));
+}
+async function drawLeave(el, ask) {
+  const e = findEvent(el.dataset.leave);
+  if (!e) return;
+  if (store.get('leaveOn') !== '1' && !ask) {
+    el.innerHTML = `<button class="linkbtn" type="button">🕒 When should we leave?</button>`;
+    $('button', el).onclick = (ev) => { ev.stopPropagation(); el.innerHTML = '<span class="muted">Checking the drive…</span>'; drawLeave(el, true); };
+    return;
+  }
+  const r = await leaveBy(e, ask).catch(() => null);
+  if (!el.isConnected) return;
+  if (!r) { el.innerHTML = ask ? '<span class="muted">Couldn’t work out the drive from here.</span>' : ''; return; }
+  store.set('leaveOn', '1');
+  const day = e.start.slice(0, 10) === todayWall() ? '' : `${dayLabel(e.start.slice(0, 10))}: `;
+  el.innerHTML = r.late ? `<b class="bad">🚗 Leave now</b> · ${r.drive} min drive` : `<b>🚗 ${day}Leave by ${fmtTime(r.leave)}</b> · ${r.drive} min drive`;
 }
 
 function renderList() {
@@ -571,7 +635,7 @@ function renderList() {
   const days = Object.keys(idx).sort().slice(0, 90);
   const nu = nextUp();
   if (!days.length) {
-    view.innerHTML = `<div class="empty"><p><b>Nothing coming up.</b></p><p>${isEditor() ? 'Tap + Add for an event, Import to drop in a schedule, or ✉︎ Email to scan your inbox.' : 'Check back soon.'}</p></div>`;
+    view.innerHTML = `<div class="empty"><p><b>Nothing coming up.</b></p><p>${isEditor() ? 'Tap + Add to type an event, import a schedule or scan your email.' : 'Check back soon.'}</p></div>`;
     return;
   }
   let lastWeek = '';
@@ -582,7 +646,7 @@ function renderList() {
     lastWeek = week;
     return `${wk}<section class="day"><h3><span class="rel">${esc(label)}</span>${label === fmtDay(d) ? '' : `<span>${['Today', 'Tomorrow'].includes(label) ? dateLine(d) : MONTHS[+d.slice(5, 7) - 1] + ' ' + +d.slice(8)}</span>`}</h3>
     ${(() => { const ov = overlapMap(idx[d]); return idx[d].map((e) => evRow(e, ov)).join(''); })()}</section>`;
-  }).join('');
+  }).join('') + syncLine();
   bindEvents(view);
 }
 
@@ -591,10 +655,11 @@ function nextCard(e) {
   const d = e.start.slice(0, 10);
   const firstNote = (e.notes || '').split(/\n|(?<=\.)\s/)[0];
   return `<section class="next" data-ev="${esc(e.id)}" role="button" tabindex="0" style="--c:${esc(isLight(c.color) ? '#94a3b8' : c.color)}">
-    <div class="nlabel">Next up · ${esc(dayLabel(d))}${dayLabel(d) === 'Today' || dayLabel(d) === 'Tomorrow' ? '' : ''}</div>
+    <div class="nlabel">Next up · ${esc(dayLabel(d))}</div>
     <div class="ntitle">${esc(e.title)}</div>
     <div class="nwhen">${esc(dateLine(d))} · ${esc(timeRange(e))}</div>
-    ${whoChip(c)}
+    ${whoChip(c)}${isOutdoor(e, c) ? `<span class="wx" data-wx="${esc(e.id)}"></span>` : ''}
+    ${e.location && !e.allDay && diffMinutes(utcToWall(new Date()), e.start) < 26 * 60 ? `<div class="nleave" data-leave="${esc(e.id)}"></div>` : ''}
     ${firstNote && firstNote.length < 140 ? `<div class="nnote">${esc(firstNote)}</div>` : ''}
     <div class="actions">${e.location ? `<a class="btn primary" href="${mapsUrl(e.location)}" target="_blank" rel="noopener" data-stop>📍 Directions</a>` : ''}<button class="btn" data-share="${esc(e.id)}">💬 Text</button><span class="btn">Details</span></div>
     ${e.location ? `<div class="nwhere">${esc(e.location)}</div>` : ''}
@@ -622,10 +687,10 @@ function renderMonth() {
       const evs = idx[d] || [];
       return `<button class="cell ${d.slice(0, 7) !== S.month ? 'dim' : ''} ${d === today ? 'today' : ''} ${d === S.day ? 'sel' : ''}" data-day="${d}">
         <span class="num">${+d.slice(8)}</span>
-        ${evs.slice(0, 3).map((e) => { const col = calById(e.cal).color; return `<span class="pill ${isLight(col) ? 'lightc' : ''}" style="--c:${esc(col)}">${e.allDay ? '' : `<span class="pt">${fmtTime(e.start, true)} </span>`}${esc(e.title)}</span>`; }).join('')}
+        <span class="pills">${evs.slice(0, 3).map((e) => { const col = calById(e.cal).color; return `<span class="pill ${isLight(col) ? 'lightc' : ''}" style="--c:${esc(col)}">${e.allDay ? '' : `<span class="pt">${fmtTime(e.start, true)} </span>`}${esc(e.title)}</span>`; }).join('')}</span>
         ${evs.length > 3 ? `<span class="more">+${evs.length - 3}</span>` : ''}</button>`;
     }).join('')}</div>
-    <section class="day" id="daylist"></section>`;
+    <section class="day" id="daylist"></section>${syncLine()}`;
   const shift = (n) => {
     const d = new Date(Date.UTC(y, m - 1 + n, 1));
     S.month = d.toISOString().slice(0, 7);
@@ -688,7 +753,7 @@ function renderWeek() {
       const ov = overlapMap(evs);
       return `<section class="day wday ${d === today ? 'today' : ''} ${d < today ? 'past' : ''}"><h3><span class="rel">${d === today ? 'Today' : WEEKDAYS[dow(d)]}</span><span>${md(d)}</span></h3>
         ${evs.length ? evs.map((e) => evRow(e, ov)).join('') : '<p class="muted nothing">Nothing planned</p>'}</section>`;
-    }).join('')}</div>`;
+    }).join('')}</div>${syncLine()}`;
   $('#prev').onclick = () => { S.week = addDays(S.week, -7); renderWeek(); };
   $('#next').onclick = () => { S.week = addDays(S.week, 7); renderWeek(); };
   $('#today').onclick = () => { S.week = addDays(today, -dow(today)); renderWeek(); };
@@ -760,7 +825,8 @@ function openDetail(id) {
       <button class="btn icon ghost" data-close aria-label="Close">✕</button></div>
     <div class="meta big">
       <div><span class="k">When</span><b>${['Today', 'Tomorrow'].includes(dayLabel(d)) ? esc(dayLabel(d)) + ' · ' : ''}${esc(dateLine(d))}</b><br>${esc(timeRange(e))}</div>
-      ${e.location ? `<div><span class="k">Where</span><b>${esc(e.location)}</b></div>` : ''}
+      ${e.location ? `<div><span class="k">Where</span><b>${esc(e.location)}</b>${!e.allDay && !isPast(e) && diffMinutes(utcToWall(new Date()), e.start) < 26 * 60 ? `<div class="nleave" data-leave="${esc(e.id)}"></div>` : ''}</div>` : ''}
+      ${!isPast(e) && isOutdoor(e, c) ? `<div class="wxrow"><span class="k">Weather</span><span class="wx" data-wx="${esc(e.id)}">Checking the forecast…</span></div>` : ''}
       ${e.notes ? `<div class="notes">${esc(e.notes)}</div>` : ''}
       ${e.addedBy ? `<div class="help">Added by ${esc(e.addedBy)}</div>` : ''}
       ${e.private && !S.relative ? `<div class="help">🔒 Only you two — extended family doesn’t see this</div>` : ''}
@@ -782,6 +848,8 @@ function openDetail(id) {
     </div>
     ${canEdit || canDelete ? `<div class="actions">${canEdit ? `<button class="btn" id="edit">Edit</button>` : ''}${canDelete ? `<button class="btn danger" id="del">Delete</button>` : ''}</div>` : ''}`);
   $('[data-close]', sh).onclick = closeModal;
+  fillExtras(sh);
+  setTimeout(() => { const w = $('.wxrow .wx', sh); if (w && !w.classList.contains('on')) w.closest('.wxrow').remove(); }, 8000);
   $('#shareText').onclick = () => shareEvent(e);
   $('#addPhone').onclick = () => {
     const url = URL.createObjectURL(new Blob([eventIcs(e)], { type: 'text/calendar' }));
@@ -808,22 +876,31 @@ function openDetail(id) {
     box.innerHTML = `<p class="help" style="width:100%">This repeats. Delete which?</p><button class="btn danger" id="delOne">Just ${esc(fmtDay(e.occ))}</button><button class="btn danger" id="delAll">Every one</button><button class="btn" id="delNo">Cancel</button>`;
     $('#delNo').onclick = () => openDetail(id);
     $('#delOne').onclick = async () => {
-      try { await saveCal((d) => { const b = d.events.find((x) => x.id === series.id); if (b) b.repeat = { ...b.repeat, skip: [...new Set([...(b.repeat.skip || []), e.occ])] }; }); closeModal(); toast('Deleted that one'); }
-      catch (err) { toast(err.message, 5000); }
+      try {
+        await saveCal((d) => { const b = d.events.find((x) => x.id === series.id); if (b) b.repeat = { ...b.repeat, skip: [...new Set([...(b.repeat.skip || []), e.occ])] }; });
+        closeModal();
+        undoToast(`Deleted ${fmtDay(e.occ)}`, (d) => { const b = d.events.find((x) => x.id === series.id); if (b) b.repeat = { ...b.repeat, skip: (b.repeat.skip || []).filter((x) => x !== e.occ) }; });
+      } catch (err) { toast(err.message, 5000); }
     };
     $('#delAll').onclick = async () => {
-      try { await saveCal((d) => { d.events = d.events.filter((x) => x.id !== series.id); }); closeModal(); toast('Deleted the whole series'); }
+      const gone = JSON.parse(JSON.stringify(series));
+      try { await saveCal((d) => { d.events = d.events.filter((x) => x.id !== series.id); }); closeModal(); undoToast('Deleted the whole series', (d) => { d.events.push(gone); }); }
       catch (err) { toast(err.message, 5000); }
     };
   };
   else if (canDelete) $('#del').onclick = async () => {
-    if (!confirm(`Delete “${e.title}”?`)) return;
+    const gone = JSON.parse(JSON.stringify(S.cal.events.find((x) => x.id === e.id) || e));
     try {
-      if (fromFamily) await saveInbox((d) => { d.events = d.events.filter((x) => x.id !== e.id); });
-      else await saveCal((d) => { d.events = d.events.filter((x) => x.id !== e.id); }, `Delete: ${e.title}`);
-      closeModal(); toast('Deleted');
+      await saveCal((d) => { d.events = d.events.filter((x) => x.id !== e.id); });
+      closeModal();
+      undoToast(`Deleted “${e.title}”`, (d) => { if (!d.events.some((x) => x.id === gone.id)) d.events.push(gone); });
     } catch (err) { toast(err.message, 5000); }
   };
+}
+
+/** "Deleted … · Undo" instead of an "Are you sure?" box. */
+function undoToast(msg, restore) {
+  toast(msg, 7000, { label: 'Undo', fn: () => saveCal(restore).then(() => toast('Put back')).catch((err) => toast(err.message, 5000)) });
 }
 
 let qrReady;
@@ -938,35 +1015,38 @@ function openEdit(e, day) {
   const sh = openModal(`
     <div class="head"><div><h2>${isNew ? 'New event' : 'Edit event'}</h2></div><button class="btn icon ghost" data-close aria-label="Close">✕</button></div>
     <form id="ef">
-      <label class="dropzone smart" id="smartZone"><input type="file" id="smartFile" accept=".ics,.ical,.pdf,image/*,text/calendar" hidden>
-        <b>📎 Drop or choose a flyer, PDF, screenshot or invite</b><br><span class="help">I’ll read it and fill in the details below</span></label>
-      ${isNew ? `<button type="button" class="btn" id="pasteBtn" style="width:100%;margin-top:8px">📋 Paste a screenshot or text</button>
+      <label class="f" for="efTitle">What</label><input class="in" id="efTitle" name="title" value="${esc(e.title)}" required placeholder="${isNew ? 'e.g. Theo practice Thu 6pm at Mad Apple' : 'e.g. Theo practice'}" ${isNew ? 'autofocus' : ''}>
+      ${isNew ? `<p class="help">Type it like you’d text it — the day, time and place fill in below.</p>
+      <div class="sources"><span class="help">Or fill it in from</span>
+        <label class="btn srcbtn"><input type="file" id="smartFile" accept=".ics,.ical,.pdf,image/*,text/calendar" hidden>${ICON.file}File or photo</label>
+        <button type="button" class="btn srcbtn" id="pasteBtn">${ICON.paste}Paste</button>
+        <button type="button" class="btn srcbtn" id="emailBtn">${ICON.mail}Email</button>
+      </div>
       <div id="pasteBox" class="hidden"><textarea class="in" id="pasteText" style="min-height:90px;margin-top:8px" placeholder="Paste the email or message here"></textarea>
-        <div class="actions" style="margin-top:6px"><button type="button" class="btn primary" id="pasteGo">Fill it in</button></div></div>` : ''}
+        <div class="actions" style="margin-top:6px"><button type="button" class="btn primary" id="pasteGo">Fill it in</button></div></div>
+      <p class="help"><a href="#" id="bulkImport">Have a whole season’s schedule? Import it all at once ›</a></p>` : ''}
       <div id="smartStatus" class="help"></div>
-      <label class="f">What</label><input class="in" name="title" value="${esc(e.title)}" required placeholder="${isNew ? 'e.g. Theo practice Thu 6pm at Mad Apple' : 'e.g. Theo practice'}">
-      ${isNew ? '<p class="help">Type it like you’d text it — a day, time or “at” place fills in the boxes below.</p>' : ''}
       <div class="two"><div><label class="f">Calendar</label><select class="in" name="cal">${calOptions(e.cal)}</select></div>
-        <div><label class="f">Type</label><select class="in" name="kind"><option value="">${esc(KINDS[kindOf({ title: e.title })])} (guess)</option>${Object.entries(KINDS).map(([k, v]) => `<option value="${k}" ${e.kind === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></div></div>
-      <p class="help">Practices are hidden from extended family unless they switch them on.</p>
-      <div class="two"><div><label class="f">Date</label><input class="in" type="date" name="date" value="${d}" required></div>
-        <div class="alld ${e.allDay ? '' : 'hidden'}"><label class="f">Through</label><input class="in" type="date" name="last" value="${lastDay}"></div></div>
+        <div><label class="f">Date</label><input class="in" type="date" name="date" value="${d}" required></div></div>
       <label class="check"><input type="checkbox" name="allDay" ${e.allDay ? 'checked' : ''}> All day</label>
-      <label class="check"><input type="checkbox" name="priv" ${e.private ? 'checked' : ''}> Only us (hide from extended family)</label>
-      <p class="help">The Family calendar is always just you two. Sports, school and church calendars are shared with relatives unless you check this.</p>
       <div class="two timed ${e.allDay ? 'hidden' : ''}"><div><label class="f">Starts</label><input class="in" type="time" name="st" value="${e.allDay ? '18:00' : e.start.slice(11, 16)}"></div>
         <div><label class="f">Ends</label><input class="in" type="time" name="et" value="${!e.allDay && e.end ? e.end.slice(11, 16) : ''}"></div></div>
-      <div class="two"><div><label class="f">Repeats</label><select class="in" name="rep"><option value="">Doesn’t repeat</option>${Object.entries(REPEATS).map(([k, v]) => `<option value="${k}" ${e.repeat?.every === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
-        <div class="untilw ${e.repeat ? '' : 'hidden'}"><label class="f">Until <span class="muted">(optional)</span></label><input class="in" type="date" name="until" value="${e.repeat?.until || ''}"></div></div>
-      ${e.repeat ? '<p class="help">Changes apply to every repeat.</p>' : ''}
-      <label class="check"><input type="checkbox" name="maybe" ${e.maybe ? 'checked' : ''}> Maybe — depends on results (e.g. “if they win”)</label>
-      <label class="f">Where</label><input class="in" name="location" value="${esc(e.location)}">
-      <label class="f">Notes</label><textarea class="in" name="notes" style="min-height:80px">${esc(e.notes)}</textarea>
-      <label class="f">Attachments <span class="muted">(schedule, bracket, flyer — PDF or photo)</span></label>
-      <div id="atts">${(e.attachments || []).map((a, i) => `<div class="att"><span>📎 ${esc(a.name)}</span><button type="button" class="btn icon ghost" data-rm="${i}" aria-label="Remove">✕</button></div>`).join('')}</div>
-      <label class="dropzone small"><input type="file" name="files" accept="application/pdf,image/*" multiple hidden><b>+ Attach a file</b></label>
-      <div id="newatts" class="help"></div>
-      <div class="actions"><button class="btn primary">Save</button></div>
+      <div class="alld ${e.allDay ? '' : 'hidden'}"><label class="f">Through</label><input class="in" type="date" name="last" value="${lastDay}"></div>
+      <label class="f">Where</label><input class="in" name="location" value="${esc(e.location)}" placeholder="Place or address">
+      <label class="f">Notes</label><textarea class="in" name="notes" style="min-height:70px">${esc(e.notes)}</textarea>
+      <label class="check"><input type="checkbox" name="priv" ${e.private ? 'checked' : ''}> 🔒 Only us <span class="muted">(hide from extended family)</span></label>
+      <details class="moreopts" ${e.kind || e.repeat || e.maybe || (e.attachments || []).length ? 'open' : ''}><summary>More options <span class="muted">— type, repeats, maybe, attachments</span></summary>
+        <label class="f">Type</label><select class="in" name="kind"><option value="">${esc(KINDS[kindOf({ title: e.title })])} (guess)</option>${Object.entries(KINDS).map(([k, v]) => `<option value="${k}" ${e.kind === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select>
+        <div class="two"><div><label class="f">Repeats</label><select class="in" name="rep"><option value="">Doesn’t repeat</option>${Object.entries(REPEATS).map(([k, v]) => `<option value="${k}" ${e.repeat?.every === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+          <div class="untilw ${e.repeat ? '' : 'hidden'}"><label class="f">Until <span class="muted">(optional)</span></label><input class="in" type="date" name="until" value="${e.repeat?.until || ''}"></div></div>
+        ${e.repeat ? '<p class="help">Changes apply to every repeat.</p>' : ''}
+        <label class="check"><input type="checkbox" name="maybe" ${e.maybe ? 'checked' : ''}> Maybe — depends on results (e.g. “if they win”)</label>
+        <label class="f">Attachments <span class="muted">(schedule, bracket, flyer)</span></label>
+        <div id="atts">${(e.attachments || []).map((a, i) => `<div class="att"><span>📎 ${esc(a.name)}</span><button type="button" class="btn icon ghost" data-rm="${i}" aria-label="Remove">✕</button></div>`).join('')}</div>
+        <label class="dropzone small"><input type="file" name="files" accept="application/pdf,image/*" multiple hidden><b>+ Attach a file</b></label>
+        <div id="newatts" class="help"></div>
+      </details>
+      <div class="actions"><button class="btn primary" id="efSave">Save</button></div>
     </form>`);
   $('[data-close]', sh).onclick = closeModal;
   const f = $('#ef');
@@ -975,7 +1055,7 @@ function openEdit(e, day) {
   const pending = []; // files read by the drop zone get attached on save
   const showNew = () => { $('#newatts').textContent = [...pending, ...f.files.files].map((x) => '📎 ' + x.name).join('  '); };
   f.files.onchange = showNew;
-  $('#smartFile').onchange = (ev) => { if (ev.target.files[0]) smartFill(ev.target.files[0], f, pending, showNew); };
+  if ($('#smartFile')) $('#smartFile').onchange = (ev) => { if (ev.target.files[0]) smartFill(ev.target.files[0], f, pending, showNew); };
   f._smart = (file) => smartFill(file, f, pending, showNew);
   if (isNew) {
     const status = (t, bad) => { const el = $('#smartStatus'); el.textContent = t; el.classList.toggle('bad', !!bad); };
@@ -994,6 +1074,8 @@ function openEdit(e, day) {
       $('#pasteBox').classList.remove('hidden'); $('#pasteText').focus();
     };
     $('#pasteGo').onclick = () => fromPaste($('#pasteText').value);
+    $('#emailBtn').onclick = () => openImport(null, 'email');
+    $('#bulkImport').onclick = (ev) => { ev.preventDefault(); openImport(); };
     // a picture pasted into the box (long-press → Paste) gets read too
     $('#pasteText').addEventListener('paste', (ev) => { const img = pastedImage(ev); if (img) { ev.preventDefault(); $('#pasteBox').classList.add('hidden'); smartFill(img, f, pending, showNew); } });
     // "Andrew Peterson concert Fri Dec 4 7:30pm at Blue Gate" → title, date, time and place
@@ -1039,7 +1121,7 @@ function openEdit(e, day) {
     else delete out.repeat;
     delete out.seriesId; delete out.occ;
     store.set('lastCal', out.cal);
-    const btn = $('button.primary', f);
+    const btn = $('#efSave', f);
     const dup = isNew && !f.dataset.dupOk && findDuplicate(out);
     if (dup) {
       f.dataset.dupOk = '1';
@@ -1741,7 +1823,7 @@ addEventListener('drop', (e) => {
   e.preventDefault();
   dragDepth = 0; $('#drop').classList.add('hidden');
   if (!S.cal) return;
-  if (!isEditor()) return toast('Add your GitHub token in Settings to import.', 4000);
+  if (!isEditor()) return toast('Sign in with Google (Settings) to import.', 4000);
   const files = [...e.dataTransfer.files];
   if ($('#ef') && !$('#modal').classList.contains('hidden')) { $('#ef')._smart(files[0]); return; }
   if ($('#review') && !$('#modal').classList.contains('hidden')) handleFiles(files);
@@ -1882,7 +1964,7 @@ function drawLists() {
     $('.tick', el).onclick = async () => {
       if (!isToday) return;
       const nowDone = !itemDone(i);
-      const up = i.repeat ? { ...i, doneOn: nowDone ? todayWall() : null, by: myName() || i.by || '' } : { ...i, done: nowDone, doneOn: nowDone ? todayWall() : null };
+      const up = tickItem(i, nowDone, i.repeat ? myName() || i.by || '' : undefined);
       S.items = S.items.map((x) => (x.id === i.id ? up : x));
       // Last morning step checked off → everyone's ready, so flip to today's chores.
       if (am && nowDone && autoMode(utcToWall(new Date()), S.items) === 'todo' && S.items.some((x) => x.list === 'todo' && dueOn(x, today))) {
@@ -1894,6 +1976,7 @@ function drawLists() {
     };
     $('.rm', el).onclick = async () => {
       S.items = S.items.filter((x) => x.id !== i.id); drawLists();
+      toast(`Removed “${i.text}”`, 6000, { label: 'Undo', fn: async () => { S.items = [...S.items, i]; drawLists(); try { await cloud.putItem(S.space, i); } catch (err) { listErr(err); } } });
       try { await cloud.delItem(S.space, i.id); } catch (err) { listErr(err); }
     };
   });
@@ -1952,14 +2035,17 @@ function drawBoard(box) {
   if (!Array.isArray(S.cal.choreLib) && customChores().length && !S.choreMigrating) { S.choreMigrating = true; saveChoreLib(sharedChores()); return; }
   const kids = chartKids(), today = dow(todayWall()), sel = S.boardChore || '';
   const days = [0, 1, 2, 3, 4, 5, 6];
+  // This week's date for each column, so chores checked off in Today show a ✓ on the chart.
+  const dateOf = (d) => addDays(todayWall(), d - today);
+  const did = (i, d) => d <= today && doneOnDate(i, dateOf(d));
   box.innerHTML = `
-    <p class="help">${sel ? `<b>${esc(choreIcon(sel))} ${esc(sel)}</b>: tap a box, or swipe across a row to fill several days. Tap or swipe again to take it off. Tap a name for every day.` : 'Tap a chore, then tap or swipe across the days. Or drag a chore into a box. Drag one in a box to move it, or drag it off the chart to remove it.'}</p>
+    <p class="help">${sel ? `<b>${esc(choreIcon(sel))} ${esc(sel)}</b>: tap a box, or swipe across a row to fill several days. Tap or swipe again to take it off. Tap a name for every day.` : 'Tap a chore, then tap or swipe across the days. Or drag a chore into a box. Drag one in a box to move it, or drag it off the chart to remove it. A green ✓ means it was checked off this week.'}</p>
     <div class="palette ${S.choreEdit ? 'editing' : ''}">${choreLib().map((c) => `<button class="chorechip ${c === sel ? 'on' : ''}" data-chore="${esc(c)}"><span>${choreIcon(c)}</span>${esc(c)}${S.choreEdit ? '<b class="x">✕</b>' : ''}</button>`).join('')}
       ${S.choreEdit ? '' : '<button class="chorechip add" id="newChore">＋ New chore</button>'}
       <button class="chorechip add" id="editChores">${S.choreEdit ? 'Done editing' : '✎ Edit list'}</button></div>
     <div class="chart ${sel ? 'paint' : ''}">
       <div class="corner"></div>${days.map((d) => `<div class="dh ${d === today ? 'today' : ''}">${DAY_SHORT[d].slice(0, d === 4 || d === 2 ? 2 : 1)}</div>`).join('')}
-      ${kids.map((k) => `<button class="kidname" data-kid="${esc(k)}">${esc(k)}</button>${days.map((d) => `<div class="ccell ${d === today ? 'today' : ''} ${sel && hasChore(k, sel, d) ? 'has' : ''}" data-kid="${esc(k)}" data-day="${d}">${choresFor(S.items, k, d).map((i) => `<span class="em" data-chore="${esc(i.text)}" title="${esc(i.text)}">${choreIcon(i.text)}</span>`).join('')}</div>`).join('')}`).join('')}
+      ${kids.map((k) => `<button class="kidname" data-kid="${esc(k)}" style="--k:${esc(kidColor(k))}"><i></i>${esc(k)}</button>${days.map((d) => { const mine = choresFor(S.items, k, d); const all = mine.length && mine.every((i) => did(i, d)); return `<div class="ccell ${d === today ? 'today' : ''} ${d < today ? 'pastday' : ''} ${sel && hasChore(k, sel, d) ? 'has' : ''} ${all ? 'alldid' : ''}" data-kid="${esc(k)}" data-day="${d}">${mine.map((i) => `<span class="em ${did(i, d) ? 'did' : ''}" data-chore="${esc(i.text)}" title="${esc(i.text)}${did(i, d) ? ' — done ✓' : ''}">${choreIcon(i.text)}</span>`).join('')}</div>`; }).join('')}`).join('')}
     </div>
     ${sel ? `<div class="actions"><button class="btn" id="unsel">Done</button></div>` : ''}`;
 
@@ -2190,46 +2276,48 @@ function openSettings() {
   const sh = openModal(`
     <div class="head"><div><h2>Settings</h2>${S.user ? `<p class="help">Signed in as ${esc(S.user.email)}${ed ? ' · editor' : ''}</p>` : ''}</div><button class="btn icon ghost" data-close aria-label="Close">✕</button></div>
 
-    ${ed ? `<h4>Invite family</h4>
+    ${ed ? `<section class="sgroup"><h3>Sharing with family</h3>
+    <h4>Invite family</h4>
     <p class="help">Copies a ready-to-send text with the link, the family code and how to add it to their Home Screen. They see games, concerts, school and church (not practices unless they switch them on, the Family calendar or anything 🔒), and can add their own events.</p>
     <div class="actions stack"><button class="btn primary big" id="copyInvite">📋 Copy invite message</button></div>
     <label class="f">Family code</label>
     <div class="two"><input class="in" id="famCode" value="${esc(S.cal.familyCode || 'Ahlersmeyer')}" autocomplete="off"><button class="btn" id="saveCode">Save code</button></div>
     <details class="help"><summary>Show QR code / link only</summary><div id="qr" class="qr"></div><div class="actions"><button class="btn" id="copyFamily">Copy link only</button></div></details>
 
-    <h4>Kitchen display</h4>
-    <p class="help">A big always-on view for the Echo Show (or any tablet). On the Echo say <b>“Alexa, open Silk Browser”</b>, go to <b>${esc(location.host + location.pathname.replace(/[^/]*$/, ''))}tv</b> and enter the family code. Tap the screen once to go full screen. Sign in there to include the Family calendar too.</p>
-
     <h4>Editors</h4>
     <p class="help">These Google accounts can add, change and delete anything, and scan their email.</p>
     <div id="eds">${(S.cal.editors || []).map((e) => `<div class="att"><span>${esc(e)}</span>${OWNERS.includes(e) ? '<span class="muted">owner</span>' : `<button class="btn icon ghost" data-rmed="${esc(e)}" aria-label="Remove">✕</button>`}</div>`).join('')}</div>
     <div class="two"><input class="in" id="newEd" type="email" placeholder="name@gmail.com"><button class="btn" id="addEd">Add editor</button></div>
 
-    <h4>Calendars</h4>
+    <h4>Kitchen display</h4>
+    <p class="help">A big always-on view for the Echo Show (or any tablet). On the Echo say <b>“Alexa, open Silk Browser”</b>, go to <b>${esc(location.host + location.pathname.replace(/[^/]*$/, ''))}tv</b> and enter the family code. Tap the screen once to go full screen.</p>
+    <p class="help">To show private events on it too, tap the 🔒 line at the bottom of its screen, then type the code it shows here:</p>
+    <div class="two"><input class="in" id="pairCode" inputmode="numeric" maxlength="7" placeholder="6-digit code"><button class="btn primary" id="pairBtn">Show everything</button></div>
+    <div id="displays"></div>
+
+    <h4>Weekly email</h4>
+    <div id="digestBox"><p class="help">Loading…</p></div>
+    </section>
+
+    <section class="sgroup"><h3>Calendars &amp; team links</h3>
     <div id="cals">${S.cal.calendars.map(calRow).join('')}</div>
     <div class="actions"><button class="btn" id="addCal">+ Add calendar</button><button class="btn primary" id="saveCals">Save calendars</button></div>
     <details class="help" style="margin-top:12px"><summary><b>Where do I find a team’s calendar link?</b></summary>
       <p><b>GameChanger app:</b> team → Schedule → Sync to calendar → copy the link.</p>
       <p><b>SportsYou:</b> Calendar → the calendar icon → Export/Subscribe → Copy URL.</p>
       <p>Paste it on the calendar it belongs to and tap Save. Games show up within 30 minutes and stay up to date.</p>
-    </details>` : ''}
+    </details></section>` : ''}
 
+    <section class="sgroup"><h3>This phone</h3>
     <h4>Notifications</h4>
     <div id="pushBox"><p class="help">Checking this phone…</p></div>
-
-    ${ed ? `<h4>Kitchen display</h4>
-    <p class="help">To show private events on the Echo, tap the 🔒 line at the bottom of its screen, then type the code it shows.</p>
-    <div class="two"><input class="in" id="pairCode" inputmode="numeric" maxlength="7" placeholder="6-digit code"><button class="btn primary" id="pairBtn">Show everything</button></div>
-    <div id="displays"></div>` : ''}
-
-    ${ed ? `<h4>Weekly email</h4>
-    <div id="digestBox"><p class="help">Loading…</p></div>` : ''}
 
     <h4>Text size</h4>
     <div class="seg"><button data-size="" class="${!store.get('textSize') ? 'on' : ''}">Normal</button><button data-size="big" class="${store.get('textSize') === 'big' ? 'on' : ''}">Larger</button><button data-size="huge" class="${store.get('textSize') === 'huge' ? 'on' : ''}">Largest</button></div>
 
     <h4>${S.user ? 'Account' : 'Sam or Emily?'}</h4>
-    <div class="actions">${S.user ? `<button class="btn" id="signOut">Sign out</button>` : `<button class="btn primary" id="signIn">Sign in with Google</button>`}</div>`);
+    <div class="actions">${S.user ? `<button class="btn" id="signOut">Sign out</button>` : `<button class="btn primary" id="signIn">Sign in with Google</button>`}</div>
+    </section>`);
   $('[data-close]', sh).onclick = closeModal;
   drawPush();
   if (ed) drawDigest();
