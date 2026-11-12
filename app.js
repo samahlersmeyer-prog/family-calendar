@@ -1,13 +1,13 @@
-import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=42';
-import { parseICS, hashId } from './lib/ics.js?v=42';
-import { parseScheduleText, parseBracket, needsWeekend } from './lib/schedule-text.js?v=42';
-import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=42';
-import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=42';
-import { initCloud } from './lib/cloud.js?v=42';
-import { CHORE_LIB, choreIcon, choresFor, setChoreDay, DAY_SHORT, DAY_LONG, itemDone, dueOn, repeatLabel as choreRepeat, MORNING_LIB, MORNING_DAYS, autoMode, doneOnDate, tickItem } from './lib/chores.js?v=42';
-import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf, kidColor as kidColorOf } from './lib/events.js?v=42';
-import { ICON } from './lib/icons.js?v=42';
-import { leaveBy, weatherFor, isOutdoor } from './lib/trip.js?v=42';
+import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=43';
+import { parseICS, hashId } from './lib/ics.js?v=43';
+import { parseScheduleText, parseBracket, needsWeekend } from './lib/schedule-text.js?v=43';
+import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=43';
+import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=43';
+import { initCloud } from './lib/cloud.js?v=43';
+import { CHORE_LIB, choreIcon, choresFor, setChoreDay, DAY_SHORT, DAY_LONG, itemDone, dueOn, repeatLabel as choreRepeat, MORNING_LIB, MORNING_DAYS, autoMode, doneOnDate, tickItem } from './lib/chores.js?v=43';
+import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf, kidColor as kidColorOf } from './lib/events.js?v=43';
+import { ICON } from './lib/icons.js?v=43';
+import { leaveBy, weatherFor, isOutdoor } from './lib/trip.js?v=43';
 
 /* ---------- config ---------- */
 const CONFIG = { owner: 'samahlersmeyer-prog', repo: 'family-calendar', branch: 'main' };
