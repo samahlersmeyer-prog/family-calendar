@@ -1,13 +1,13 @@
-import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=44';
-import { parseICS, hashId } from './lib/ics.js?v=44';
-import { parseScheduleText, parseBracket, needsWeekend } from './lib/schedule-text.js?v=44';
-import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=44';
-import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=44';
-import { initCloud } from './lib/cloud.js?v=44';
-import { CHORE_LIB, choreIcon, choresFor, setChoreDay, DAY_SHORT, DAY_LONG, itemDone, dueOn, repeatLabel as choreRepeat, MORNING_LIB, MORNING_DAYS, autoMode, doneOnDate, tickItem } from './lib/chores.js?v=44';
-import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf, kidColor as kidColorOf } from './lib/events.js?v=44';
-import { ICON } from './lib/icons.js?v=44';
-import { leaveBy, weatherFor, isOutdoor } from './lib/trip.js?v=44';
+import { encryptJSON, decryptJSON, encryptBytes, decryptBytes, bytesToB64 } from './lib/crypto.js?v=45';
+import { parseICS, hashId } from './lib/ics.js?v=45';
+import { parseScheduleText, parseBracket, needsWeekend } from './lib/schedule-text.js?v=45';
+import { todayWall, addDays, addMinutes, diffMinutes, dow, validDate, utcToWall, pad } from './lib/tz.js?v=45';
+import { classifyMail, scoreRow, mergeRows, splitSentences, groupRows, KEEP_SCORE, CHECK_SCORE, EVENT, TICKETS } from './lib/mail-filter.js?v=45';
+import { initCloud } from './lib/cloud.js?v=45';
+import { CHORE_LIB, choreIcon, choresFor, setChoreDay, DAY_SHORT, DAY_LONG, itemDone, dueOn, repeatLabel as choreRepeat, MORNING_LIB, MORNING_DAYS, autoMode, doneOnDate, tickItem } from './lib/chores.js?v=45';
+import { REPEATS, occurrences, mergeFeeds, KINDS, kindOf, KIDS, calKid as calKidOf, titleKid as titleKidOf, forKid as forKidOf, kidColor as kidColorOf } from './lib/events.js?v=45';
+import { ICON } from './lib/icons.js?v=45';
+import { leaveBy, weatherFor, isOutdoor } from './lib/trip.js?v=45';
 
 /* ---------- config ---------- */
 const CONFIG = { owner: 'samahlersmeyer-prog', repo: 'family-calendar', branch: 'main' };
@@ -615,17 +615,23 @@ function fillExtras(root) {
 async function drawLeave(el, ask) {
   const e = findEvent(el.dataset.leave);
   if (!e) return;
-  if (store.get('leaveOn') !== '1' && !ask) {
-    el.innerHTML = `<button class="linkbtn" type="button">🕒 When should we leave?</button>`;
-    $('button', el).onclick = (ev) => { ev.stopPropagation(); el.innerHTML = '<span class="muted">Checking the drive…</span>'; drawLeave(el, true); };
+  const fromHere = (btn) => { btn.onclick = (ev) => { ev.stopPropagation(); el.innerHTML = '<span class="muted">Checking the drive…</span>'; drawLeave(el, true); }; };
+  // From where this phone is (quietly if location is already allowed), else from the home address in Settings.
+  // iPhone home-screen apps often report location as not allowed even after it was, so this never goes blank:
+  // if nothing works it shows the button again.
+  let r = await leaveBy(e, ask).catch(() => null);
+  let fromHome = false;
+  if (!r && S.cal.home) { r = await leaveBy(e, false, S.cal.home).catch(() => null); fromHome = !!r; }
+  if (!el.isConnected) return;
+  if (!r) {
+    if (ask) el.innerHTML = '<span class="muted">Couldn’t work out the drive from here.</span>';
+    else { el.innerHTML = `<button class="linkbtn" type="button">🕒 When should we leave?</button>`; fromHere($('button', el)); }
     return;
   }
-  const r = await leaveBy(e, ask).catch(() => null);
-  if (!el.isConnected) return;
-  if (!r) { el.innerHTML = ask ? '<span class="muted">Couldn’t work out the drive from here.</span>' : ''; return; }
-  store.set('leaveOn', '1');
   const day = e.start.slice(0, 10) === todayWall() ? '' : `${dayLabel(e.start.slice(0, 10))}: `;
-  el.innerHTML = r.late ? `<b class="bad">🚗 Leave now</b> · ${r.drive} min drive` : `<b>🚗 ${day}Leave by ${fmtTime(r.leave)}</b> · ${r.drive} min drive`;
+  const tail = `${r.drive} min drive${fromHome ? ' from home' : ''}`;
+  el.innerHTML = r.late ? `<b class="bad">🚗 Leave now</b> · ${tail}` : `<b>🚗 ${day}Leave by ${fmtTime(r.leave)}</b> · ${tail}`;
+  if (fromHome && !ask) { el.insertAdjacentHTML('beforeend', ' <button class="linkbtn" type="button">From here instead</button>'); fromHere($('button', el)); }
 }
 
 function renderList() {
